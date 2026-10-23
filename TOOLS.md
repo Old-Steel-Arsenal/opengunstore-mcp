@@ -190,6 +190,25 @@ Open zone is a single named location (shelf, case, safe) with no capacity limit.
 | Undo a move | `storage_undo_move` | yes | Manual moves only, one step, and only while the thing is still where it was put; `ok=false` is a reply |
 | Confirm where sold units came from | `storage_confirm_taken` | yes | The only action that takes a quantity out of a location; cannot exceed the pending amount |
 
+## 3c. Range board (`tools/range_board.py`): 6 Range tools, three that read and three that write
+
+Only for a store running the **Range** extension (osa_range, paid, on stores Old Steel Arsenal
+hosts): registered when `GUNSTORE_MCP_RANGE=1` (the POS deploy's `MCP_RANGE`), otherwise
+absent. Each call is the counter's own board endpoint, so the POS checks that Range is on,
+that the user holds a counter role, and every booking rule. Days are `YYYY-MM-DD`, times
+`HH:MM` (24-hour, the store's clock).
+
+| Tool | What it does |
+|---|---|
+| `range_board(date?)` | One day: hours, lanes by area, services, every booking (who, what, when, lanes, note, `moved_note` = tell the customer), block reasons. Read-only. |
+| `range_free_lanes(date, start, end, service?, exclude_lanes?)` | Lanes free then (cleaning included), only in the service's areas. Read-only. |
+| `range_find_bookings(customer?, date_from?, date_to?, include_cancelled?)` | A customer's (or everyone's) bookings, earliest first; `truncated` when the POS hit its limit. Read-only. |
+| `range_book(kind, date, start, end, lanes, …, confirm)` | Reservation (customer, service, party_size), Custom Slot (customer, custom_title, custom_price) or Block (block_reason). Never moves another booking to make room: a clash is refused naming the booking in the way. `confirm=true`. |
+| `range_update(booking, start?, end?, lanes?, note?, party_size?, confirm)` | Change time on the same day, lanes, note or people; re-reads the booking first. `confirm=true`. |
+| `range_cancel(booking, reason, confirm)` | Cancel with a reason; it stays in the bookings list. `confirm=true`. |
+
+The three board writes are also in `frappe_run_method`'s always-confirm list.
+
 ## 4. Orders, payment and shipping (the Pending Order queue)
 
 | Task | Tool | Confirm | Notes |
@@ -344,8 +363,8 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-116 tools, of which 109 register by default (the 4 distributor queue actions and the 3
-GunBroker write actions need explicit opt-in); the behaviour of `full` is unchanged. An
+122 tools, of which 109 register by default (the 4 distributor queue actions, the 3
+GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
 refusing". There are three layers of defence, and each still holds if another fails:
@@ -421,4 +440,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 116 (10 generic + 57 dedicated + 12 distributor + 7 report tools + 30 shop-floor). 109 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` and the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.9.1; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 122 (10 generic + 57 dedicated + 12 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 109 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.10.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

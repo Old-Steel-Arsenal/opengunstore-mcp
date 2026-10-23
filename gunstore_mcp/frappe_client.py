@@ -229,6 +229,14 @@ class FrappeClient:
         return self._request("POST", f"/api/method/{method}", json_body=kwargs or {},
                              timeout=timeout)
 
+    def get_method(self, method: str, params: dict | None = None, *,
+                   timeout: int | None = None) -> Any:
+        """A whitelisted method that only answers GET (``methods=["GET"]``)."""
+        self._cpa_check_method(method)
+        return self._request("GET", f"/api/method/{method}",
+                             params={k: v for k, v in (params or {}).items() if v is not None},
+                             timeout=timeout)
+
     def submit_document(self, doctype: str, name: str) -> Any:
         self._cpa_check_write("submit_document")
         doc = self.get_document(doctype, name)

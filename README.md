@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-116 tools total: 10 generic + 57 curated + 12 distributor + 7 CPA reports + 30 shop-floor; 109 register by default. Two opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`) and the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`). Neither is registered otherwise — an absent tool cannot be talked into firing.
+122 tools total: 10 generic + 57 curated + 12 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 109 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 27 tools (the write surface is never registered), a per-name read-only
@@ -223,7 +223,8 @@ and approves. No key is typed anywhere, and the server holds none.
   there. The distributor actions never open remotely (the server refuses to start);
   the 3 GunBroker writes open on the **full** connector only, where the POS deploy
   sets `GUNSTORE_MCP_GUNBROKER_ACTIONS` from that store's own GunBroker switch — a
-  store that lists on GunBroker must be able to end a listing.
+  store that lists on GunBroker must be able to end a listing. The Range tools open
+  where the POS deploy sets `MCP_RANGE=1` (a store running the Range extension).
 - Env: `GUNSTORE_MCP_TRANSPORT=http`, `FRAPPE_BASE_URL` (the store's public POS URL,
   also the OAuth issuer), `GUNSTORE_MCP_PUBLIC_URL`
   (`https://pos.<domain>/connector/<mode>/mcp`, the URL users are given),

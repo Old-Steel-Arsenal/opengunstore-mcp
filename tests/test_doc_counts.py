@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 from gunstore_mcp import config
 from gunstore_mcp.modes import CPA_TOOL_NAMES
-from gunstore_mcp.tools import curated, distributor, generic, reports, shopfloor
+from gunstore_mcp.tools import curated, distributor, generic, range_board, reports, shopfloor
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SELF = pathlib.Path(__file__).name
@@ -44,11 +44,12 @@ class _FakeMCP:
         return deco
 
 
-_GATES = (distributor.ACTIONS_ENV, curated.GUNBROKER_ACTIONS_ENV, "GUNSTORE_MCP_TRANSPORT")
+_GATES = (distributor.ACTIONS_ENV, curated.GUNBROKER_ACTIONS_ENV, range_board.RANGE_ENV, "GUNSTORE_MCP_TRANSPORT")
 
 
 def _names(module, *, actions: str | None = None,
-           gb_actions: str | None = None, transport: str | None = None) -> frozenset:
+           gb_actions: str | None = None, transport: str | None = None,
+           range_on: str | None = None) -> frozenset:
     # Both registration gates are cleared first, then set explicitly. A stray
     # GUNSTORE_MCP_* in the developer's shell must not be able to decide what
     # "the live surface" is, or these counts would differ per machine.
@@ -59,6 +60,8 @@ def _names(module, *, actions: str | None = None,
         env[curated.GUNBROKER_ACTIONS_ENV] = gb_actions
     if transport is not None:
         env["GUNSTORE_MCP_TRANSPORT"] = transport
+    if range_on is not None:
+        env[range_board.RANGE_ENV] = range_on
     mcp = _FakeMCP()
     # _load_env stubbed for the same reason as in test_distributor: a developer's own
     # mcp/.env must not be able to decide what "the live surface" is here, or this
@@ -66,6 +69,7 @@ def _names(module, *, actions: str | None = None,
     with patch.dict(os.environ, env, clear=True), \
             patch.object(distributor, "_load_env", lambda: None), \
             patch.object(curated, "_load_env", lambda: None), \
+            patch.object(range_board, "_load_env", lambda: None), \
             patch.object(config, "_load_env", lambda: None):
         module.register(mcp)
     return frozenset(mcp.tools)
@@ -84,6 +88,8 @@ def _live() -> dict:
     cur_on, cur_off = len(cur_on_names), len(cur_off_names)
     dist_on = _count(distributor, actions="1")
     dist_off = _count(distributor, actions=None)
+    range_on = _count(range_board, range_on="1")
+    range_off = _count(range_board, range_on=None)
     return {
         "generic": generic_n,
         "curated": cur_on,
@@ -99,13 +105,15 @@ def _live() -> dict:
         "distributor": dist_on,
         "distributor_default": dist_off,
         "actions": dist_on - dist_off,
-        "total": generic_n + cur_on + dist_on + reports_n + shopfloor_n,
-        "default": generic_n + cur_off + dist_off + reports_n + shopfloor_n,
+        "range": range_on,
+        "range_default": range_off,
+        "total": generic_n + cur_on + dist_on + reports_n + shopfloor_n + range_on,
+        "default": generic_n + cur_off + dist_off + reports_n + shopfloor_n + range_off,
         "cpa_surface": len(CPA_TOOL_NAMES),
         # the remote connector's full surface: the default minus the tools that
         # read a path on the server (upload_attachment), never registered remotely.
         "remote_default": generic_n + len(_names(curated, transport="http"))
-            + dist_off + reports_n + shopfloor_n,
+            + dist_off + reports_n + shopfloor_n + range_off,
     }
 
 
@@ -121,6 +129,8 @@ CLAIMS = [
     ("README.md", r"(\d+) distributor \+", "distributor"),
     ("README.md", r"(\d+) CPA reports", "reports"),
     ("README.md", r"(\d+) shop-floor", "shopfloor"),
+    ("README.md", r"(\d+) Range;", "range"),
+    ("README.md", r"the (\d+) Range tools", "range"),
     ("README.md", r"(\d+) register by default", "default"),
     ("TOOLS.md", r"Total tools: (\d+)", "total"),
     ("TOOLS.md", r"(\d+) generic \+", "generic"),
@@ -129,6 +139,7 @@ CLAIMS = [
     ("TOOLS.md", r"(\d+) distributor \+", "distributor"),
     ("TOOLS.md", r"(\d+) report tools", "reports"),
     ("TOOLS.md", r"(\d+) shop-floor\)", "shopfloor"),
+    ("TOOLS.md", r"(\d+) Range tools", "range"),
     ("TOOLS.md", r"offers all\s+(\d+) tools", "total"),
     ("TOOLS.md", r"(\d+) register by default", "default"),
     ("TOOLS.md", r"registers exactly (\d+) of them", "cpa_surface"),
@@ -184,10 +195,10 @@ class ExactClaims(unittest.TestCase):
         L = self.live
         self.assertEqual(
             L["total"], L["generic"] + L["curated"] + L["distributor"] + L["reports"]
-            + L["shopfloor"])
+            + L["shopfloor"] + L["range"])
         # Two independent registration gates now, so the default surface is the
         # total less BOTH opt-in sets.
-        self.assertEqual(L["default"], L["total"] - L["actions"] - L["gb_actions"])
+        self.assertEqual(L["default"], L["total"] - L["actions"] - L["gb_actions"] - L["range"])
         self.assertEqual(L["curated"], L["curated_default"] + L["gb_actions"])
 
     def test_both_registration_gates_actually_hold_something_back(self):
@@ -198,6 +209,7 @@ class ExactClaims(unittest.TestCase):
         self.assertEqual(L["actions"], 4)
         self.assertEqual(L["gb_actions"], 3)
         self.assertEqual(L["gb_readonly"], 2)
+        self.assertEqual((L["range"], L["range_default"]), (6, 0))
 
     def test_the_gunbroker_buckets_are_read_off_the_surface(self):
         """gb_readonly is derived, so it has to be shown to be derived: every gb_

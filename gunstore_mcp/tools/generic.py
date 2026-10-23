@@ -47,6 +47,10 @@ _DESTRUCTIVE_METHOD = re.compile(
 # is the backstop for the expert bare path — when a new server write ships,
 # check it against this criterion.
 _ALWAYS_CONFIRM_METHODS = {
+    # The range board's writes (osa_range extension; tools/range_board.py WRITE_METHODS).
+    "osa_range.api.board.create_booking",
+    "osa_range.api.board.update_booking",
+    "osa_range.api.board.cancel_booking",
     "ffl_core.api.manual_order.update_order",
     "osa_consignment.api.consignment_out.update_consignment_line_prices",
     "osa_consignment.api.consignment_out.create_consignment_out",

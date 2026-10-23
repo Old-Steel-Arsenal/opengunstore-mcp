@@ -34,7 +34,7 @@ from . import __version__, audit
 from .auth import FrappeTokenVerifier
 from .config import HTTP, get_config, get_transport
 from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, FilteredMCP, get_mode
-from .tools import curated, distributor, generic, reports, shopfloor
+from .tools import curated, distributor, generic, range_board, reports, shopfloor
 
 
 def _audited(fn, name: str, surface: str, args: tuple, kwargs: dict):
@@ -99,6 +99,7 @@ def register_tools(mcp, mode: str | None = None) -> None:
     distributor.register(target)
     reports.register(target)
     shopfloor.register(target)
+    range_board.register(target)
 
 
 def _http_settings() -> dict:

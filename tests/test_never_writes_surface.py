@@ -29,7 +29,7 @@ from gunstore_mcp import config as config_mod
 from gunstore_mcp import safety, server
 from gunstore_mcp.frappe_client import get_client
 from gunstore_mcp.safety import MCP_NEVER_WRITES, WriteRefused
-from gunstore_mcp.tools import curated, distributor, generic, reports, shopfloor
+from gunstore_mcp.tools import curated, distributor, generic, range_board, reports, shopfloor
 
 DT = "GunBroker Settings"
 FORBIDDEN = sorted(MCP_NEVER_WRITES[DT])
@@ -108,7 +108,7 @@ def _creds():
 # registered surface" is only as good as this list, and it was wrong once already
 # (generic + curated only, while the server registers four — an unguarded writer
 # dropped into distributor.py went unnoticed by the static check below).
-_SURFACE_MODULES = (generic, curated, distributor, reports, shopfloor)
+_SURFACE_MODULES = (generic, curated, distributor, reports, shopfloor, range_board)
 
 
 def _surface():
@@ -121,12 +121,14 @@ def _surface():
     developer happened to have exported."""
     mcp = FakeMCP()
     env = {k: v for k, v in os.environ.items()
-           if k not in (curated.GUNBROKER_ACTIONS_ENV, distributor.ACTIONS_ENV)}
+           if k not in (curated.GUNBROKER_ACTIONS_ENV, distributor.ACTIONS_ENV, range_board.RANGE_ENV)}
     env[curated.GUNBROKER_ACTIONS_ENV] = "1"
     env[distributor.ACTIONS_ENV] = "1"
+    env[range_board.RANGE_ENV] = "1"
     with patch.dict(os.environ, env, clear=True), \
             patch.object(curated, "_load_env", lambda: None), \
-            patch.object(distributor, "_load_env", lambda: None):
+            patch.object(distributor, "_load_env", lambda: None), \
+            patch.object(range_board, "_load_env", lambda: None):
         for module in _SURFACE_MODULES:
             module.register(mcp)
     return mcp.tools
@@ -355,7 +357,7 @@ class TheSurfaceIsTheWholeSurface(unittest.TestCase):
         tools = _surface()
         for name in ("frappe_run_method", "update_settings", "distributor_route_queue",
                      "sales_report", "inventory_count_finalize", "gb_push_serial",
-                     "distributor_confirm_order"):
+                     "distributor_confirm_order", "range_book"):
             self.assertIn(name, tools)
 
     def test_an_unguarded_writer_is_named_no_matter_which_module_defines_it(self):

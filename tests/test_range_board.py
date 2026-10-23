@@ -115,6 +115,10 @@ class Writes(Base):
         self.assertEqual(len(p["client_token"]), 32)
         self.assertNotIn("custom_price", p)            # unset fields are not sent
 
+    def test_a_block_is_booked_by_staff(self):
+        self.tools["range_book"](**WRITES["range_book"][0], source="Phone", confirm=True)
+        self.assertEqual(json.loads(self.client.calls[-1][2]["payload"])["source"], "Staff")
+
     def test_update_and_cancel_read_the_booking_first(self):
         self.tools["range_update"](booking="RNG-1", start="11:00", end="13:00", lanes=["Bay 3"], note="",
                                    confirm=True)

@@ -136,7 +136,9 @@ def register(mcp: Any) -> None:
             "booking_type": kind, "starts_at": _stamp(day, start, "start"), "ends_at": _stamp(day, end, "end"),
             "lanes": lanes, "customer": customer, "service": service, "party_size": party_size,
             "custom_title": custom_title, "custom_price": custom_price, "block_reason": block_reason,
-            "note": note or "", "source": source, "moves": [], "keep": [], "client_token": uuid.uuid4().hex,
+            # Blocked time is the staff's own, as on the board; a customer's booking keeps the given source.
+            "note": note or "", "source": "Staff" if kind == "Block" else source, "moves": [], "keep": [],
+            "client_token": uuid.uuid4().hex,
         }
         return get_client().call_method(_B + "create_booking", {
             "payload": json.dumps({k: v for k, v in payload.items() if v is not None})})

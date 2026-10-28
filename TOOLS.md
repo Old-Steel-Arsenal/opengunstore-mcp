@@ -313,12 +313,12 @@ Handy dotted paths for operations without a dedicated tool (all via `frappe_run_
 | Retry a failed web-order revenue invoice | `ffl_woo_sync.woocommerce.revenue.create_web_invoice_now` |
 | Undo a consignment settlement | cancel the settlement Sales Invoice with `frappe_cancel_document` |
 
-## 9b. Distributor direct-ship (RSR Direct Connect, Sports South): `distributor_*`, 13 tools (8 read-only + 5 queue actions)
+## 9b. Distributor direct-ship (RSR Direct Connect, Sports South): `distributor_*`, 13 tools (9 always registered + 4 queue actions)
 
-Eight read-only tools and five confirm-gated queue actions. It deliberately excludes
+Eight read-only tools, one confirm-gated draft-order tool and four confirm-gated queue actions. It deliberately excludes
 placing an order directly, writes to Settings, and any mutation surface beyond what is
-listed here. The five queue actions are registered only when
-`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` is set, and never on the remote connector.
+listed here. The four queue actions are registered only when
+`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` is set, and never on the remote connector. "Always registered" means in `full` mode; cpa mode registers none of the writes.
 
 | Tool | Server method | Notes |
 |---|---|---|
@@ -330,7 +330,7 @@ listed here. The five queue actions are registered only when
 | `distributor_check_availability` | `distributor.api.check_availability` | **Live** quantity and price re-check (makes an HTTP call to the distributor; read-only) |
 | `distributor_precheck_fds` | `distributor.router.precheck_fds` | Asks the distributor whether it will ship to that transfer dealer (HTTP call; read-only) |
 | `distributor_fulfillment_options` | `distributor.options.fulfillment_options_for_order` | Decision panel for one web order: candidate distributors per line (cheapest first), a local-stock comparison row and a verdict. Read-only. **Read the three-state note below before using the result** |
-| `distributor_create_draft_order` | `distributor.api.create_orders` | Needs `confirm`. Draft restock order(s) from one distributor, shipped to the store; lines are `{sku, qty, item_code?, upc?}`. A line with no Item gets the shop's existing Item, else one made from the catalog. May split into several drafts; places nothing |
+| `distributor_create_draft_order` | `distributor.api.create_orders` | Needs `confirm`. Draft restock order(s) from one distributor, shipped to the store; lines are `{sku, qty, item_code?, upc?}`. A line with no Item gets the shop's existing Item, else one made from the catalog. May split into several drafts; places nothing. Not idempotent: after a failed call, check `distributor_orders` for Drafts before retrying. Registered on the remote connector too |
 | `distributor_confirm_order` | `distributor.api.confirm_order` | Needs `confirm`. Draft to Queued and starts the ordering worker, which is **a real, irreversible purchase**; RSR has no cancel API. Counter-origin orders also require the invoice to be paid in full |
 | `distributor_cancel_order` | `distributor.api.cancel_order` | Needs `confirm` and a `reason`. Safe only before ordering (Draft or Queued); an order already placed is flagged and operations are alerted, because returns are a manual process |
 | `distributor_reroute` | `distributor.router.reroute` | Needs `confirm`. Re-runs routing after the blocking reason is fixed; only creates Drafts, idempotent |
@@ -364,7 +364,7 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-123 tools, of which 109 register by default (the 5 distributor queue actions, the 3
+123 tools, of which 110 register by default (the 4 distributor queue actions, the 3
 GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
@@ -391,8 +391,8 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 108 tools remotely (`upload_attachment` reads a path on the server and is never
-registered remotely). The distributor actions never open remotely. The three GunBroker
+surface is 109 tools remotely (`upload_attachment` reads a path on the server and is never
+registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The three GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
 
@@ -441,4 +441,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 123 (10 generic + 57 dedicated + 13 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 109 register by default: the 5 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.10.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 123 (10 generic + 57 dedicated + 13 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 110 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.10.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

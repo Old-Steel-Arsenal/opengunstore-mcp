@@ -50,7 +50,7 @@ _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
 
 def actions_enabled() -> bool:
-    """Whether the 4 queue-action tools are registered at all (default: NO).
+    """Whether the 5 queue-action tools are registered at all (default: NO).
 
     Unlike GUNSTORE_MCP_MODE this does not refuse to start on an unrecognised value,
     and the asymmetry is deliberate: a typo'd mode could hand back a WRITABLE server,
@@ -225,6 +225,29 @@ def register(mcp: Any) -> None:
             _API + "cancel_order",
             {"do_name": do_name, "reason": reason,
              "confirmed": 1 if distributor_confirmed else 0},
+        )
+
+    @mcp.tool()
+    def distributor_create_draft_order(
+        distributor: str, lines: list[dict], confirm: bool = False
+    ) -> Any:
+        """Create DRAFT restock order(s) from one distributor — the Distributor Orders
+        page's "Create Draft Order(s)" button. `distributor` is the Distributor name
+        (e.g. "RSR"); `lines` is [{sku, qty, item_code?, upc?}] with the distributor's
+        SKU — find it with distributor_catalog_search. A line without an Item gets
+        the shop's existing Item (by UPC or SKU), else one made from the catalog.
+
+        Ships to the store (stocking). The cart may split into several drafts
+        (firearms never share an order with accessories). Nothing is placed: a draft
+        becomes a real purchase only through distributor_confirm_order. Creates
+        documents (and possibly Items), so it asks for confirm=true.
+
+        Returns [{name, order_type, account, line_count}], one per draft."""
+        require_confirm(f"create draft order(s) from {distributor}", confirm)
+        return get_client().call_method(
+            _API + "create_orders",
+            {"distributor": distributor, "lines": lines,
+             "ship_context": {"mode": "stocking"}},
         )
 
     @mcp.tool()

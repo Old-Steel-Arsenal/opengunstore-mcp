@@ -206,7 +206,7 @@ class ExactClaims(unittest.TestCase):
         catch: turn either one into a no-op and the arithmetic above still
         balances, because everything would simply always be registered."""
         L = self.live
-        self.assertEqual(L["actions"], 4)
+        self.assertEqual(L["actions"], 5)
         self.assertEqual(L["gb_actions"], 3)
         self.assertEqual(L["gb_readonly"], 2)
         self.assertEqual((L["range"], L["range_default"]), (6, 0))

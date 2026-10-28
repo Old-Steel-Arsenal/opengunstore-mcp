@@ -205,6 +205,9 @@ def register(mcp: Any) -> None:
         page (or through distributor_confirm_order where that is enabled). Creates
         documents (and possibly Items), so it asks for confirm=true.
 
+        NOT idempotent: calling it again makes a second set of drafts. If a call
+        fails or times out, check distributor_orders (status Draft) before retrying.
+
         Returns [{name, order_type, account, line_count}], one per draft."""
         require_confirm(f"create draft order(s) from {distributor}", confirm)
         return get_client().call_method(

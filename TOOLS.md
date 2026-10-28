@@ -318,7 +318,7 @@ Handy dotted paths for operations without a dedicated tool (all via `frappe_run_
 Eight read-only tools, one confirm-gated draft-order tool and four confirm-gated queue actions. It deliberately excludes
 placing an order directly, writes to Settings, and any mutation surface beyond what is
 listed here. The four queue actions are registered only when
-`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` is set, and never on the remote connector.
+`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` is set, and never on the remote connector. "Always registered" means in `full` mode; cpa mode registers none of the writes.
 
 | Tool | Server method | Notes |
 |---|---|---|
@@ -330,7 +330,7 @@ listed here. The four queue actions are registered only when
 | `distributor_check_availability` | `distributor.api.check_availability` | **Live** quantity and price re-check (makes an HTTP call to the distributor; read-only) |
 | `distributor_precheck_fds` | `distributor.router.precheck_fds` | Asks the distributor whether it will ship to that transfer dealer (HTTP call; read-only) |
 | `distributor_fulfillment_options` | `distributor.options.fulfillment_options_for_order` | Decision panel for one web order: candidate distributors per line (cheapest first), a local-stock comparison row and a verdict. Read-only. **Read the three-state note below before using the result** |
-| `distributor_create_draft_order` | `distributor.api.create_orders` | Needs `confirm`. Draft restock order(s) from one distributor, shipped to the store; lines are `{sku, qty, item_code?, upc?}`. A line with no Item gets the shop's existing Item, else one made from the catalog. May split into several drafts; places nothing |
+| `distributor_create_draft_order` | `distributor.api.create_orders` | Needs `confirm`. Draft restock order(s) from one distributor, shipped to the store; lines are `{sku, qty, item_code?, upc?}`. A line with no Item gets the shop's existing Item, else one made from the catalog. May split into several drafts; places nothing. Not idempotent: after a failed call, check `distributor_orders` for Drafts before retrying. Registered on the remote connector too |
 | `distributor_confirm_order` | `distributor.api.confirm_order` | Needs `confirm`. Draft to Queued and starts the ordering worker, which is **a real, irreversible purchase**; RSR has no cancel API. Counter-origin orders also require the invoice to be paid in full |
 | `distributor_cancel_order` | `distributor.api.cancel_order` | Needs `confirm` and a `reason`. Safe only before ordering (Draft or Queued); an order already placed is flagged and operations are alerted, because returns are a manual process |
 | `distributor_reroute` | `distributor.router.reroute` | Needs `confirm`. Re-runs routing after the blocking reason is fixed; only creates Drafts, idempotent |

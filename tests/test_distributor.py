@@ -20,6 +20,7 @@ from gunstore_mcp.safety import WriteRefused
 from gunstore_mcp.tools import distributor
 
 _ACTION_TOOLS = (
+    "distributor_create_draft_order",
     "distributor_confirm_order",
     "distributor_cancel_order",
     "distributor_reroute",
@@ -63,7 +64,7 @@ def _register(actions: str | None) -> dict:
 
 
 class ActionGate(unittest.TestCase):
-    """The 4 queue actions are OFF unless explicitly switched on.
+    """The 5 queue actions are OFF unless explicitly switched on.
 
     SEMANTICS PINNED HERE: they are **not registered**, not "registered but
     refusing" — the same stance cpa mode takes (modes.py layer 1: "physically
@@ -84,11 +85,11 @@ class ActionGate(unittest.TestCase):
         tools = _register("1")
         for name in _ACTION_TOOLS:
             self.assertIn(name, tools)
-        self.assertEqual(len(tools), 12)
+        self.assertEqual(len(tools), 13)
 
     def test_only_explicitly_truthy_values_open_the_gate(self):
         for on in ("1", "true", "TRUE", "yes", "on", " 1 "):
-            self.assertEqual(len(_register(on)), 12, f"{on!r} should enable")
+            self.assertEqual(len(_register(on)), 13, f"{on!r} should enable")
         for off in ("", "  ", "0", "false", "off", "no"):
             self.assertEqual(len(_register(off)), 8, f"{off!r} must stay closed")
 
@@ -115,9 +116,9 @@ class DistributorTools(unittest.TestCase):
     # ---- surface ---------------------------------------------------------
 
     def test_distributor_tool_count_pinned(self):
-        # 8 read + 4 queue actions = 12. TOOLS.md / CLAUDE.md / README quote the
+        # 8 read + 5 queue actions = 13. TOOLS.md / CLAUDE.md / README quote the
         # TOTAL (114) — if this moves, move all of them too.
-        self.assertEqual(len(self.tools), 12)
+        self.assertEqual(len(self.tools), 13)
 
     def test_every_tool_is_namespaced(self):
         for name in self.tools:
@@ -221,6 +222,21 @@ class DistributorTools(unittest.TestCase):
                                                distributor_confirmed=True, confirm=True)
         _method, args = self.client.calls[0]
         self.assertEqual(args["confirmed"], 1)
+
+    def test_create_draft_order_refuses_without_confirm(self):
+        with self.assertRaises(WriteRefused):
+            self.tools["distributor_create_draft_order"](
+                distributor="RSR", lines=[{"sku": "GLUX4350203FRMOS", "qty": 1}])
+        self.assertEqual(self.client.calls, [])
+
+    def test_create_draft_order_ships_to_the_store(self):
+        lines = [{"sku": "GLUX4350203FRMOS", "qty": 1, "upc": "764503072864"}]
+        self.tools["distributor_create_draft_order"](distributor="RSR", lines=lines,
+                                                     confirm=True)
+        self.assertEqual(self.client.calls[0],
+                         ("ffl_integrations.distributor.api.create_orders",
+                          {"distributor": "RSR", "lines": lines,
+                           "ship_context": {"mode": "stocking"}}))
 
     def test_reroute_refuses_without_confirm(self):
         with self.assertRaises(WriteRefused):

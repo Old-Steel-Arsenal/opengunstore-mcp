@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-122 tools total: 10 generic + 57 curated + 12 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 109 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+123 tools total: 10 generic + 57 curated + 13 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 109 register by default. Three opt-in sets are held back: the 5 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 27 tools (the write surface is never registered), a per-name read-only

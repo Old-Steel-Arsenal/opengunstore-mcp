@@ -12,7 +12,7 @@ Modes (GUNSTORE_MCP_MODE): "full" (default) = the whole surface; "cpa" = the
 read-only accountant surface (exactly the tools in modes.CPA_TOOL_NAMES; the
 write tools are never registered).
 
-GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1 additionally opts into the 4 distributor queue
+GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1 additionally opts into the 5 distributor queue
 actions, which are NOT registered otherwise. Sizes are asserted in tests rather
 than restated here — this docstring is where the last stale count lived."""
 from __future__ import annotations

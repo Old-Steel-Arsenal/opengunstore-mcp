@@ -20,7 +20,6 @@ from gunstore_mcp.safety import WriteRefused
 from gunstore_mcp.tools import distributor
 
 _ACTION_TOOLS = (
-    "distributor_create_draft_order",
     "distributor_confirm_order",
     "distributor_cancel_order",
     "distributor_reroute",
@@ -64,7 +63,7 @@ def _register(actions: str | None) -> dict:
 
 
 class ActionGate(unittest.TestCase):
-    """The 5 queue actions are OFF unless explicitly switched on.
+    """The 4 queue actions are OFF unless explicitly switched on.
 
     SEMANTICS PINNED HERE: they are **not registered**, not "registered but
     refusing" — the same stance cpa mode takes (modes.py layer 1: "physically
@@ -79,7 +78,11 @@ class ActionGate(unittest.TestCase):
             self.assertNotIn(name, tools, f"{name} must not exist unless opted in")
 
     def test_the_read_surface_is_untouched_by_the_gate(self):
-        self.assertEqual(len(_register(None)), 8)
+        self.assertEqual(len(_register(None)), 9)
+
+    def test_the_draft_order_tool_is_outside_the_gate(self):
+        # A draft places nothing, so it is on every surface, the remote one included.
+        self.assertIn("distributor_create_draft_order", _register(None))
 
     def test_explicit_opt_in_registers_them(self):
         tools = _register("1")
@@ -91,7 +94,7 @@ class ActionGate(unittest.TestCase):
         for on in ("1", "true", "TRUE", "yes", "on", " 1 "):
             self.assertEqual(len(_register(on)), 13, f"{on!r} should enable")
         for off in ("", "  ", "0", "false", "off", "no"):
-            self.assertEqual(len(_register(off)), 8, f"{off!r} must stay closed")
+            self.assertEqual(len(_register(off)), 9, f"{off!r} must stay closed")
 
     def test_an_unrecognised_value_fails_closed_instead_of_refusing_to_boot(self):
         """GUNSTORE_MCP_MODE refuses to start on a typo because a typo'd 'cpa' would
@@ -99,8 +102,8 @@ class ActionGate(unittest.TestCase):
         is true: anything not explicitly truthy leaves the actions off, so this is
         fail-closed by construction and refusing to boot would cost availability for
         no safety."""
-        self.assertEqual(len(_register("ture")), 8)
-        self.assertEqual(len(_register("enabled")), 8)
+        self.assertEqual(len(_register("ture")), 9)
+        self.assertEqual(len(_register("enabled")), 9)
 
 
 class DistributorTools(unittest.TestCase):
@@ -116,7 +119,7 @@ class DistributorTools(unittest.TestCase):
     # ---- surface ---------------------------------------------------------
 
     def test_distributor_tool_count_pinned(self):
-        # 8 read + 5 queue actions = 13. TOOLS.md / CLAUDE.md / README quote the
+        # 8 read + 1 draft + 4 queue actions = 13. TOOLS.md / CLAUDE.md / README quote the
         # TOTAL (114) — if this moves, move all of them too.
         self.assertEqual(len(self.tools), 13)
 

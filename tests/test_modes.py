@@ -131,14 +131,14 @@ class RegistrationLayer(unittest.TestCase):
 		self.assertEqual(len(mcp.tools), 27)
 
 	def test_default_full_mode_holds_both_opt_in_sets_back(self):
-		"""Default full mode is 109, not 117: the 5 distributor queue actions and the
+		"""Default full mode is 110, not 117: the 4 distributor queue actions and the
 		3 GunBroker write actions each require an explicit opt-in. Pinned separately
 		from the full surface so that turning either gate into a no-op would break a
 		test rather than quietly restore the wider surface."""
 		mcp = FakeMCP()
 		with _actions(None):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 109)
+		self.assertEqual(len(mcp.tools), 110)
 		for name in ("distributor_confirm_order", "distributor_cancel_order",
 				"distributor_reroute", "distributor_update_order_ffl",
 				"gb_push_serial", "gb_end_listing", "gb_pull_orders"):

@@ -146,7 +146,7 @@ CLAIMS = [
     ("TOOLS.md", r"exactly the (\d+) names", "cpa_surface"),
     ("TOOLS.md", r"surface is (\d+) tools remotely", "remote_default"),
     # the distributor split, as the section 9b heading phrases it
-    ("TOOLS.md", r"\((\d+) read-only \+", "distributor_default"),
+    ("TOOLS.md", r"\((\d+) always registered \+", "distributor_default"),
     ("TOOLS.md", r"\+ (\d+) queue actions\)", "actions"),
     # GunBroker buckets. Deliberately phrased "<N> read-only GunBroker tools" so the
     # distributor "(N read-only +" pattern above can never match them.
@@ -206,7 +206,7 @@ class ExactClaims(unittest.TestCase):
         catch: turn either one into a no-op and the arithmetic above still
         balances, because everything would simply always be registered."""
         L = self.live
-        self.assertEqual(L["actions"], 5)
+        self.assertEqual(L["actions"], 4)
         self.assertEqual(L["gb_actions"], 3)
         self.assertEqual(L["gb_readonly"], 2)
         self.assertEqual((L["range"], L["range_default"]), (6, 0))

@@ -550,6 +550,8 @@ class CuratedTools(unittest.TestCase):
 				("resolve_card_reversal", ("TP-1", True, "portal shows it", "P-1"))):
 			with self.assertRaises(WriteRefused):
 				self.tools[name](*args)
+		with self.assertRaises(ValueError):
+			self.tools["refund_card_charge"]("TP-1", 10.0, "Return", "  ", confirm=True)
 		self.tools["void_card_charge"]("TP-1", "wrong card", confirm=True)
 		self.assertEqual(self._last(), (
 			"call_method", "ffl_integrations.payments.si_reversal.void_sales_invoice_charge",

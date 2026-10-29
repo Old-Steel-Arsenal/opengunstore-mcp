@@ -633,7 +633,8 @@ def register(mcp: Any) -> None:
         each with its id (pass it as terminal_payment), amount, refunded_amount, left,
         card, gateway reference, can_void, and locked/lock for a void or refund the
         processor never confirmed. Also says whether it is a membership invoice and
-        why a Return is not possible (stock / bound book). Read-only."""
+        why a Return is not possible (stock / bound book). Read-only; managers only
+        (Sales Manager / System Manager), like the void and refund themselves."""
         return get_client().call_method(
             "ffl_integrations.payments.si_reversal.card_charges",
             {"sales_invoice": sales_invoice},
@@ -648,6 +649,7 @@ def register(mcp: Any) -> None:
         refunded; a settled charge is refused by the processor — refund it instead.
         terminal_payment comes from card_charges. confirm=true."""
         require_confirm(f"void_card_charge {terminal_payment}", confirm)
+        reason = require_reason(f"void_card_charge {terminal_payment}", reason)
         return get_client().call_method(
             "ffl_integrations.payments.si_reversal.void_sales_invoice_charge",
             {"terminal_payment": terminal_payment, "reason": reason},
@@ -666,6 +668,7 @@ def register(mcp: Any) -> None:
         (the sale stands): the invoice owes the amount again. amount at most what is
         left (card_charges); a Return refunds the credit note total. confirm=true."""
         require_confirm(f"refund_card_charge {terminal_payment}", confirm)
+        reason = require_reason(f"refund_card_charge {terminal_payment}", reason)
         return get_client().call_method(
             "ffl_integrations.payments.si_reversal.refund_sales_invoice_charge",
             {"terminal_payment": terminal_payment, "amount": amount,
@@ -684,6 +687,7 @@ def register(mcp: Any) -> None:
         checked. Never guess — a wrong answer books money that did not move.
         confirm=true."""
         require_confirm(f"resolve_card_reversal {terminal_payment}", confirm)
+        note = require_reason(f"resolve_card_reversal {terminal_payment}", note)
         return get_client().call_method(
             "ffl_integrations.payments.si_reversal.resolve_card_reversal",
             {"terminal_payment": terminal_payment, "went_through": 1 if went_through else 0,

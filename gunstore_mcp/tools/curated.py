@@ -623,6 +623,73 @@ def register(mcp: Any) -> None:
              "amount": amount, "transaction_number": transaction_number},
         )
 
+    # Give card money back on a counter Sales Invoice (POS 0.5.0, payments/si_reversal.py).
+    # Server-side: manager roles only, money goes back only to the card it came from,
+    # and an unconfirmed outcome locks the charge until resolve_card_reversal.
+
+    @mcp.tool()
+    def card_charges(sales_invoice: str) -> Any:
+        """The card charges on a Sales Invoice that can still be voided or refunded:
+        each with its id (pass it as terminal_payment), amount, refunded_amount, left,
+        card, gateway reference, can_void, and locked/lock for a void or refund the
+        processor never confirmed. Also says whether it is a membership invoice and
+        why a Return is not possible (stock / bound book). Read-only."""
+        return get_client().call_method(
+            "ffl_integrations.payments.si_reversal.card_charges",
+            {"sales_invoice": sales_invoice},
+        )
+
+    @mcp.tool()
+    def void_card_charge(terminal_payment: str, reason: str, confirm: bool = False) -> Any:
+        """Void a whole card charge on a Sales Invoice before the processor settles it
+        (usually the same day): the processor reverses it and the invoice owes the
+        amount again (today's Payment Entry is cancelled, else a Journal Entry today).
+        Refused on a membership invoice (refund it as a Return) or once part was
+        refunded; a settled charge is refused by the processor — refund it instead.
+        terminal_payment comes from card_charges. confirm=true."""
+        require_confirm(f"void_card_charge {terminal_payment}", confirm)
+        return get_client().call_method(
+            "ffl_integrations.payments.si_reversal.void_sales_invoice_charge",
+            {"terminal_payment": terminal_payment, "reason": reason},
+        )
+
+    @mcp.tool()
+    def refund_card_charge(
+        terminal_payment: str, amount: float, refund_type: str, reason: str,
+        confirm: bool = False,
+    ) -> Any:
+        """Refund part or all of a card charge on a Sales Invoice to the card it came
+        from. refund_type 'Return' (goods/service given back or price lowered): a
+        credit note takes the amount off the sale, tax in proportion — not for
+        invoices that touched stock or the bound book (use cancel_order), and on a
+        membership invoice only after the membership was cancelled. 'Collect again'
+        (the sale stands): the invoice owes the amount again. amount at most what is
+        left (card_charges); a Return refunds the credit note total. confirm=true."""
+        require_confirm(f"refund_card_charge {terminal_payment}", confirm)
+        return get_client().call_method(
+            "ffl_integrations.payments.si_reversal.refund_sales_invoice_charge",
+            {"terminal_payment": terminal_payment, "amount": amount,
+             "refund_type": refund_type, "reason": reason},
+        )
+
+    @mcp.tool()
+    def resolve_card_reversal(
+        terminal_payment: str, went_through: bool, note: str,
+        portal_reference: str | None = None, confirm: bool = False,
+    ) -> Any:
+        """Settle a void or refund the card processor never confirmed (the charge is
+        locked until then). Look it up in the processor's portal FIRST:
+        went_through=true books it exactly as an approval would (portal_reference
+        required); false unlocks the charge and books nothing. note = what was
+        checked. Never guess — a wrong answer books money that did not move.
+        confirm=true."""
+        require_confirm(f"resolve_card_reversal {terminal_payment}", confirm)
+        return get_client().call_method(
+            "ffl_integrations.payments.si_reversal.resolve_card_reversal",
+            {"terminal_payment": terminal_payment, "went_through": 1 if went_through else 0,
+             "note": note, "portal_reference": portal_reference},
+        )
+
     @mcp.tool()
     def push_shipment(sales_invoice: str, confirm: bool = False) -> Any:
         """Push a submitted order to ShipStation so staff can buy the label there —

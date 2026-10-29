@@ -138,7 +138,7 @@ class RegistrationLayer(unittest.TestCase):
 		mcp = FakeMCP()
 		with _actions(None):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 110)
+		self.assertEqual(len(mcp.tools), 114)
 		for name in ("distributor_confirm_order", "distributor_cancel_order",
 				"distributor_reroute", "distributor_update_order_ffl",
 				"gb_push_serial", "gb_end_listing", "gb_pull_orders"):
@@ -178,7 +178,7 @@ class RegistrationLayer(unittest.TestCase):
 		mcp = FakeMCP()
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 117)
+		self.assertEqual(len(mcp.tools), 121)
 		self.assertTrue(EXPECTED_CPA_TOOLS <= set(mcp.tools))
 		# regression: none of the write faces leaked out of full mode
 		for name in ("frappe_run_method", "dispose_order", "receive_goods",

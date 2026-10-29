@@ -214,6 +214,10 @@ The three board writes are also in `frappe_run_method`'s always-confirm list.
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
 | Record a payment on an unpaid order | `record_payment` | yes | Omitting the amount pays the balance. Modes: Cash, Credit Card, Zelle, ACH, Check/Money Order. Zelle and ACH need `transaction_number`, Check/Money Order its check or money order number there; when Payroc is enabled a Credit Card payment taken on the virtual terminal needs the authorization code |
+| See the card charges on an invoice that can be given back | `card_charges` | no | Each charge's id (`terminal_payment`), amount, refunded, left, card, gateway reference, whether it can be voided, and whether a void/refund is waiting to be confirmed. Says if it is a membership invoice and why a Return is not possible |
+| Void a card charge | `void_card_charge` | yes | The whole charge, before the processor settles it (usually the same day). The invoice owes the amount again. Not for membership invoices or a charge already partly refunded; a settled charge is refused by the processor — refund it instead. Managers only |
+| Refund a card charge to its card | `refund_card_charge` | yes | Any part of what is left. `refund_type` `Return` (goods given back or price lowered: a credit note takes it off the sale, tax in proportion; not for invoices that moved stock or touched the bound book, membership invoices only after the membership is cancelled) or `Collect again` (the sale stands; the invoice owes it again). Managers only |
+| Settle a void or refund the processor never confirmed | `resolve_card_reversal` | yes | Check the processor's portal first. `went_through=true` books it (needs `portal_reference`), `false` unlocks the charge. Managers only |
 | **Dispose** the guns on a counter or dealer order | `dispose_order` | yes | Books the transfer disposition per gun: stock out and push to FastBound. The server refuses unpaid orders and an invalid receiving FFL. Check the FFL and serial numbers before running it |
 | **Dispose** the guns on a web order | `dispose_web_order` | yes | Web orders are not pushed to ShipStation (the Woo plugin ships them itself) |
 | Push an order to ShipStation for a label | `push_shipment` | yes | Idempotent; fails safe on an invalid FFL or unpaid order |
@@ -292,7 +296,7 @@ usable the day they ship, without an MCP update.
 - `frappe_list_documents`, `frappe_get_document`, `frappe_describe_doctype`: read any doctype (describe first to see field names).
 - `frappe_create_document`, `frappe_update_document`: create or change any record (credential fields stripped).
 - `frappe_delete_document`, `frappe_submit_document`, `frappe_cancel_document`: delete, submit, cancel (all need `confirm`).
-- `frappe_run_method`: call any whitelisted method by dotted path. A method name containing a high-consequence verb (delete, cancel, refund, dispose, push, charge, consolidate, ship, return, receive, sold, settle, onboard and similar) needs `confirm`. A short explicit list of methods without such a verb but with high consequences (`_ALWAYS_CONFIRM_METHODS`: order updates, consignment price and invoice methods, record_payment, stock add/set, tax-exempt changes, every stocktake, cash drawer and storage write, trade-in intake, cost correction) needs `confirm` as well. The test for inclusion is: it books money, moves stock, or changes compliance or tax state.
+- `frappe_run_method`: call any whitelisted method by dotted path. A method name containing a high-consequence verb (delete, cancel, refund, dispose, push, charge, consolidate, ship, return, receive, sold, settle, onboard and similar) needs `confirm`. A short explicit list of methods without such a verb but with high consequences (`_ALWAYS_CONFIRM_METHODS`: order updates, consignment price and invoice methods, record_payment, resolving a card void/refund, stock add/set, tax-exempt changes, every stocktake, cash drawer and storage write, trade-in intake, cost correction) needs `confirm` as well. The test for inclusion is: it books money, moves stock, or changes compliance or tax state.
 - `frappe_run_report`: run any report.
 
 Handy dotted paths for operations without a dedicated tool (all via `frappe_run_method`):
@@ -364,7 +368,7 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-123 tools, of which 110 register by default (the 4 distributor queue actions, the 3
+127 tools, of which 114 register by default (the 4 distributor queue actions, the 3
 GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
@@ -391,7 +395,7 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 109 tools remotely (`upload_attachment` reads a path on the server and is never
+surface is 113 tools remotely (`upload_attachment` reads a path on the server and is never
 registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The three GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
@@ -441,4 +445,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 123 (10 generic + 57 dedicated + 13 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 110 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.10.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 127 (10 generic + 61 dedicated + 13 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 114 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.11.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

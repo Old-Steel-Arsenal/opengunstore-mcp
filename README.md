@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-123 tools total: 10 generic + 57 curated + 13 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 110 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+127 tools total: 10 generic + 61 curated + 13 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 114 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 3 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 27 tools (the write surface is never registered), a per-name read-only
@@ -150,6 +150,10 @@ claude mcp add gunstore-pos-cpa --scope user \
 | `pending_orders` / `pending_web_orders` | the Pending Order queue: counter/dealer rows + paid web orders (read-only; consignments live in `consignment_queue`) |
 | `dispose_order` / `dispose_web_order` | book the FFL transfer dispositions — stock-out + FastBound push (`confirm`) |
 | `record_payment` | Payment Entry against an unpaid submitted invoice; Zelle needs `transaction_number` (`confirm`) |
+| `card_charges` | Card charges on a Sales Invoice that can still be voided or refunded (read-only) |
+| `void_card_charge` | Void a whole card charge before it settles; the invoice owes it again (`confirm`) |
+| `refund_card_charge` | Refund part or all of a card charge: `Return` (credit note) or `Collect again` (`confirm`) |
+| `resolve_card_reversal` | Book or release a void/refund the processor never confirmed, after checking its portal (`confirm`) |
 | `cancel_order` | cancel a submitted counter/dealer order — cascades disposition/stock/FastBound/ShipStation reversal + refund (`confirm` + `reason`) |
 | `push_shipment` / `mark_shipped_manually` / `shipstation_test_connection` | ShipStation label push (`confirm`) / no-push escape hatch (`confirm`) / probe |
 | `consignment_queue` / `consignment_dealers` / `consignment_serials` / `consignment_dealer_orders` | outbound-consignment reads: At-Dealer queue / shippable FFL dealers / pickable serials / settlement queue |
@@ -218,7 +222,7 @@ and approves. No key is typed anywhere, and the server holds none.
   `ffl_core/api/connector.py` and the Connector Audit Log doctype.
 - A user with **Restrict IP** set cannot use the connector: calls reach the POS from
   the connector (and ultimately from Claude's servers), never from the user's IP.
-- `cpa` mode keeps all three read-only layers. The full surface is **109 tools**
+- `cpa` mode keeps all three read-only layers. The full surface is **113 tools**
   remotely: `upload_attachment` reads a path on the *server* and is never registered
   there. The distributor queue actions never open remotely (the server refuses to start;
   `distributor_create_draft_order` is not one of them and is there);

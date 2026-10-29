@@ -55,6 +55,8 @@ _ALWAYS_CONFIRM_METHODS = {
     "osa_consignment.api.consignment_out.update_consignment_line_prices",
     "osa_consignment.api.consignment_out.create_consignment_out",
     "ffl_core.api.manual_order.record_payment",
+    # Card void/refund (POS 0.5.0): resolve books money with no gated verb in its name.
+    "ffl_integrations.payments.si_reversal.resolve_card_reversal",
     "osa_consignment.api.dealer_orders.create_consignment_invoice_now",
     "ffl_core.api.item_admin.add_stock",
     "ffl_core.api.item_admin.set_stock",

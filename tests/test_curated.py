@@ -541,6 +541,30 @@ class CuratedTools(unittest.TestCase):
 		for mode in ("Cash", "Credit Card", "Zelle", "ACH", "Check/Money Order"):
 			self.assertIn(mode, doc)
 
+	def test_card_void_and_refund(self):
+		self.tools["card_charges"]("SI-1")
+		self.assertEqual(self._last(), (
+			"call_method", "ffl_integrations.payments.si_reversal.card_charges", {"sales_invoice": "SI-1"}))
+		for name, args in (("void_card_charge", ("TP-1", "wrong card")),
+				("refund_card_charge", ("TP-1", 10.0, "Return", "returned")),
+				("resolve_card_reversal", ("TP-1", True, "portal shows it", "P-1"))):
+			with self.assertRaises(WriteRefused):
+				self.tools[name](*args)
+		with self.assertRaises(ValueError):
+			self.tools["refund_card_charge"]("TP-1", 10.0, "Return", "  ", confirm=True)
+		self.tools["void_card_charge"]("TP-1", "wrong card", confirm=True)
+		self.assertEqual(self._last(), (
+			"call_method", "ffl_integrations.payments.si_reversal.void_sales_invoice_charge",
+			{"terminal_payment": "TP-1", "reason": "wrong card"}))
+		self.tools["refund_card_charge"]("TP-1", 10.0, "Return", "returned", confirm=True)
+		self.assertEqual(self._last(), (
+			"call_method", "ffl_integrations.payments.si_reversal.refund_sales_invoice_charge",
+			{"terminal_payment": "TP-1", "amount": 10.0, "refund_type": "Return", "reason": "returned"}))
+		self.tools["resolve_card_reversal"]("TP-1", False, "not in portal", confirm=True)
+		self.assertEqual(self._last(), (
+			"call_method", "ffl_integrations.payments.si_reversal.resolve_card_reversal",
+			{"terminal_payment": "TP-1", "went_through": 0, "note": "not in portal", "portal_reference": None}))
+
 	def test_push_shipment_requires_confirm(self):
 		with self.assertRaises(WriteRefused):
 			self.tools["push_shipment"]("SI-1")
@@ -783,6 +807,7 @@ class CuratedTools(unittest.TestCase):
 			"gb_pull_orders",
 			"pending_orders", "pending_web_orders",
 			"dispose_order", "dispose_web_order", "record_payment",
+			"card_charges", "void_card_charge", "refund_card_charge", "resolve_card_reversal",
 			"push_shipment", "mark_shipped_manually", "shipstation_test_connection",
 			"start_4473", "manager_override_4473", "start_transfer_4473",
 			"upload_attachment",
@@ -803,7 +828,7 @@ class CuratedTools(unittest.TestCase):
 		# test_modes.py::test_full_mode_registers_the_whole_surface_including_the_cpa_surface.
 		# The DEFAULT surface is 3 lower here and 7 lower overall (both gates off).
 		# Moving any of these means moving README.md, CLAUDE.md and TOOLS.md.
-		self.assertEqual(len(self.tools), 57)
+		self.assertEqual(len(self.tools), 61)
 
 
 class GunBrokerActionGate(unittest.TestCase):

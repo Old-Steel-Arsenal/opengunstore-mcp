@@ -1,6 +1,6 @@
 """CPA mode tests: the three defence layers.
 
-Layer 1 — registration: GUNSTORE_MCP_MODE=cpa registers EXACTLY the 27-name
+Layer 1 — registration: GUNSTORE_MCP_MODE=cpa registers EXACTLY the 29-name
 allowlist (set equality, per spec acceptance #1 — not merely "no write tools").
 Layer 2 — client: mutating client methods + non-allowlisted dotted methods
 raise CpaModeRefused before any HTTP.
@@ -67,9 +67,10 @@ EXPECTED_CPA_TOOLS = {
 	# generic (4)
 	"frappe_list_documents", "frappe_get_document", "frappe_describe_doctype",
 	"frappe_run_report",
-	# curated read-only (10)
+	# curated read-only (12)
 	"find_item", "item_stock", "firearms_in_stock",
 	"pending_orders", "pending_web_orders",
+	"web_order_exceptions", "gb_pending_orders",
 	"consignment_queue", "consignment_dealers", "consignment_serials",
 	"consignment_dealer_orders",
 	"boundbook_mismatches",
@@ -96,6 +97,11 @@ EXPECTED_METHOD_ALLOWLIST = {
 	"ffl_core.api.inventory_count.get_counts",
 	"ffl_core.api.inventory_count.variance",
 	"ffl_integrations.fastbound.inventory_sync.boundbook_mismatches",
+	"ffl_woo_sync.woocommerce.order_audit.web_stock_legs_outstanding",
+	"ffl_woo_sync.woocommerce.order_audit.shipped_undisposed_orders",
+	"ffl_integrations.gunbroker.fulfillment.list_pending_gb_orders",
+	"ffl_integrations.gunbroker.fulfillment.get_dispose_stock_lines",
+	"ffl_core.customer_flags.banned_order_rows",
 }
 
 SETTINGS_DOCTYPES = {
@@ -124,24 +130,24 @@ class FakeMCP:
 
 
 class RegistrationLayer(unittest.TestCase):
-	def test_cpa_mode_registers_exactly_the_27_allowlisted_tools(self):
+	def test_cpa_mode_registers_exactly_the_29_allowlisted_tools(self):
 		mcp = FakeMCP()
 		server.register_tools(mcp, mode="cpa")
 		self.assertEqual(set(mcp.tools), EXPECTED_CPA_TOOLS)
-		self.assertEqual(len(mcp.tools), 27)
+		self.assertEqual(len(mcp.tools), 29)
 
 	def test_default_full_mode_holds_both_opt_in_sets_back(self):
-		"""Default full mode is 110, not 117: the 4 distributor queue actions and the
-		3 GunBroker write actions each require an explicit opt-in. Pinned separately
+		"""Default full mode is 160, not 168: the 4 distributor queue actions and the
+		4 GunBroker write actions each require an explicit opt-in. Pinned separately
 		from the full surface so that turning either gate into a no-op would break a
 		test rather than quietly restore the wider surface."""
 		mcp = FakeMCP()
 		with _actions(None):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 114)
+		self.assertEqual(len(mcp.tools), 160)
 		for name in ("distributor_confirm_order", "distributor_cancel_order",
 				"distributor_reroute", "distributor_update_order_ffl",
-				"gb_push_serial", "gb_end_listing", "gb_pull_orders"):
+				"gb_push_serial", "gb_end_listing", "gb_pull_orders", "gb_update_listing"):
 			self.assertNotIn(name, mcp.tools)
 		# the read halves are never gated
 		for name in ("gb_test_connection", "gb_listing_status"):
@@ -169,7 +175,7 @@ class RegistrationLayer(unittest.TestCase):
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="cpa")
 		self.assertEqual(set(mcp.tools), EXPECTED_CPA_TOOLS)
-		self.assertEqual(len(mcp.tools), 27)
+		self.assertEqual(len(mcp.tools), 29)
 		for name in ("gb_push_serial", "gb_end_listing", "gb_pull_orders",
 				"gb_test_connection", "gb_listing_status"):
 			self.assertNotIn(name, mcp.tools)
@@ -178,7 +184,7 @@ class RegistrationLayer(unittest.TestCase):
 		mcp = FakeMCP()
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 121)
+		self.assertEqual(len(mcp.tools), 168)
 		self.assertTrue(EXPECTED_CPA_TOOLS <= set(mcp.tools))
 		# regression: none of the write faces leaked out of full mode
 		for name in ("frappe_run_method", "dispose_order", "receive_goods",
@@ -215,7 +221,37 @@ class RegistrationLayer(unittest.TestCase):
 		):
 			self.assertNotIn(name, mcp.tools)
 
-	def test_method_allowlist_is_exactly_the_fourteen_names(self):
+	def test_the_full_coverage_tools_stay_off_cpa(self):
+		"""Every tool of the full-coverage pass is full/remote only, except the two
+		order-exception reads; the NOT_PURE_READS tools can never join a read surface."""
+		from gunstore_mcp.modes import CPA_TOOL_NAMES, NOT_PURE_READS
+		mcp = FakeMCP()
+		server.register_tools(mcp, mode="cpa")
+		for name in (
+			"list_pos_actions", "preview_order", "create_order", "update_order",
+			"pending_order_action", "pos_draft_orders", "pos_ticket", "card_terminal_charge",
+			"saved_cards", "charge_saved_card", "trade_in_intake",
+			"customer_overview", "customer_find", "customer_manage", "agreement_request",
+			"agreement_manage", "gunsmith_jobs", "gunsmith_intake", "gunsmith_job_action",
+			"memberships", "membership_action", "refresh_4473_status", "resolve_4473",
+			"fastbound_serial_diff", "fastbound_serial_fix", "boundbook_record_fix",
+			"verify_customer_ffl", "ffl_directory_search", "firearm_costs",
+			"correct_firearm", "store_overview", "receive_goods_preview", "photo_gallery",
+			"edit_photo_gallery", "extensions_status", "manage_extension",
+			"distributor_incoming", "distributor_receive", "distributor_ensure_item",
+			"web_order_action", "woo_store_maintenance", "gb_update_listing",
+			"gb_record_payment", "gb_order_action", "gb_dispose_order",
+			"card_processor_test_connection",
+		):
+			self.assertNotIn(name, mcp.tools)
+		self.assertIn("web_order_exceptions", mcp.tools)
+		self.assertIn("gb_pending_orders", mcp.tools)
+		self.assertFalse(NOT_PURE_READS & CPA_TOOL_NAMES)
+		full = FakeMCP()
+		server.register_tools(full, mode="full")
+		self.assertTrue(NOT_PURE_READS <= set(full.tools))
+
+	def test_method_allowlist_is_exactly_the_eighteen_names(self):
 		self.assertEqual(set(CPA_METHOD_ALLOWLIST), EXPECTED_METHOD_ALLOWLIST)
 
 	def test_cpa_mode_has_the_dry_run_boundbook_tool_but_not_the_writable_one(self):

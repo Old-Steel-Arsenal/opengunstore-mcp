@@ -27,7 +27,8 @@ from unittest.mock import patch
 
 from gunstore_mcp import config
 from gunstore_mcp.modes import CPA_TOOL_NAMES
-from gunstore_mcp.tools import curated, distributor, generic, range_board, reports, shopfloor
+from gunstore_mcp.tools import (compliance, curated, customers, distributor, generic, orders,
+                                range_board, reports, services, shopfloor)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SELF = pathlib.Path(__file__).name
@@ -90,12 +91,18 @@ def _live() -> dict:
     dist_off = _count(distributor, actions=None)
     range_on = _count(range_board, range_on="1")
     range_off = _count(range_board, range_on=None)
+    # The full-coverage modules have no registration switch: one count each.
+    orders_n = _count(orders)
+    customers_n = _count(customers)
+    services_n = _count(services)
+    compliance_n = _count(compliance)
+    always = reports_n + shopfloor_n + orders_n + customers_n + services_n + compliance_n
     return {
         "generic": generic_n,
         "curated": cur_on,
         "curated_default": cur_off,
         "gb_actions": cur_on - cur_off,
-        # the GunBroker reads, which are NOT gated. Counted off the surface, not
+        # the GunBroker tools that are NOT gated (reads plus the order-side writes). Counted off the surface, not
         # written down as "<total gb tools> minus the writes": that literal was a
         # hand-maintained number in the one file whose whole purpose is to abolish
         # them, and adding gb_pull_orders in PR-4b silently made it wrong.
@@ -107,13 +114,17 @@ def _live() -> dict:
         "actions": dist_on - dist_off,
         "range": range_on,
         "range_default": range_off,
-        "total": generic_n + cur_on + dist_on + reports_n + shopfloor_n + range_on,
-        "default": generic_n + cur_off + dist_off + reports_n + shopfloor_n + range_off,
+        "orders": orders_n,
+        "customers": customers_n,
+        "services": services_n,
+        "compliance": compliance_n,
+        "total": generic_n + cur_on + dist_on + always + range_on,
+        "default": generic_n + cur_off + dist_off + always + range_off,
         "cpa_surface": len(CPA_TOOL_NAMES),
         # the remote connector's full surface: the default minus the tools that
         # read a path on the server (upload_attachment), never registered remotely.
         "remote_default": generic_n + len(_names(curated, transport="http"))
-            + dist_off + reports_n + shopfloor_n + range_off,
+            + dist_off + always + range_off,
     }
 
 
@@ -130,6 +141,10 @@ CLAIMS = [
     ("README.md", r"(\d+) CPA reports", "reports"),
     ("README.md", r"(\d+) shop-floor", "shopfloor"),
     ("README.md", r"(\d+) Range;", "range"),
+    ("README.md", r"(\d+) counter orders", "orders"),
+    ("README.md", r"(\d+) customers", "customers"),
+    ("README.md", r"(\d+) gunsmith/membership", "services"),
+    ("README.md", r"(\d+) compliance/store-admin", "compliance"),
     ("README.md", r"the (\d+) Range tools", "range"),
     ("README.md", r"(\d+) register by default", "default"),
     ("TOOLS.md", r"Total tools: (\d+)", "total"),
@@ -140,6 +155,10 @@ CLAIMS = [
     ("TOOLS.md", r"(\d+) report tools", "reports"),
     ("TOOLS.md", r"(\d+) shop-floor\)", "shopfloor"),
     ("TOOLS.md", r"(\d+) Range tools", "range"),
+    ("TOOLS.md", r"(\d+) counter-order tools", "orders"),
+    ("TOOLS.md", r"(\d+) customer tools", "customers"),
+    ("TOOLS.md", r"(\d+) gunsmith/membership tools", "services"),
+    ("TOOLS.md", r"(\d+) compliance and store-admin tools", "compliance"),
     ("TOOLS.md", r"offers all\s+(\d+) tools", "total"),
     ("TOOLS.md", r"(\d+) register by default", "default"),
     ("TOOLS.md", r"registers exactly (\d+) of them", "cpa_surface"),
@@ -148,14 +167,14 @@ CLAIMS = [
     # the distributor split, as the section 9b heading phrases it
     ("TOOLS.md", r"\((\d+) always registered \+", "distributor_default"),
     ("TOOLS.md", r"\+ (\d+) queue actions\)", "actions"),
-    # GunBroker buckets. Deliberately phrased "<N> read-only GunBroker tools" so the
-    # distributor "(N read-only +" pattern above can never match them.
-    ("TOOLS.md", r"(\d+) read-only GunBroker tools", "gb_readonly"),
+    # GunBroker buckets. Deliberately phrased "<N> always-registered GunBroker tools" so
+    # the distributor "(N always registered +" pattern above can never match them.
+    ("TOOLS.md", r"(\d+) always-registered GunBroker tools", "gb_readonly"),
     ("TOOLS.md", r"(\d+)\s+GunBroker write actions", "gb_actions"),
     ("TOOLS.md", r"(\d+) distributor queue actions", "actions"),
     # The size of each opt-in SET as the README phrases it. The sweep below cannot
     # guard these: it only asks whether a quoted number is SOME live bucket size, and
-    # 2 is one (gb_readonly). A count is only guarded where something knows which
+    # 6 is one (gb_readonly). A count is only guarded where something knows which
     # count it is.
     ("README.md", r"(\d+) GunBroker write actions", "gb_actions"),
     ("README.md", r"(\d+) distributor queue actions", "actions"),
@@ -195,7 +214,8 @@ class ExactClaims(unittest.TestCase):
         L = self.live
         self.assertEqual(
             L["total"], L["generic"] + L["curated"] + L["distributor"] + L["reports"]
-            + L["shopfloor"] + L["range"])
+            + L["shopfloor"] + L["range"] + L["orders"] + L["customers"] + L["services"]
+            + L["compliance"])
         # Two independent registration gates now, so the default surface is the
         # total less BOTH opt-in sets.
         self.assertEqual(L["default"], L["total"] - L["actions"] - L["gb_actions"] - L["range"])
@@ -207,8 +227,8 @@ class ExactClaims(unittest.TestCase):
         balances, because everything would simply always be registered."""
         L = self.live
         self.assertEqual(L["actions"], 4)
-        self.assertEqual(L["gb_actions"], 3)
-        self.assertEqual(L["gb_readonly"], 2)
+        self.assertEqual(L["gb_actions"], 4)
+        self.assertEqual(L["gb_readonly"], 6)
         self.assertEqual((L["range"], L["range_default"]), (6, 0))
 
     def test_the_gunbroker_buckets_are_read_off_the_surface(self):
@@ -222,6 +242,13 @@ class ExactClaims(unittest.TestCase):
         self.assertTrue(all(n.startswith("gb_") for n in gated), sorted(gated))
         self.assertEqual(len(gated), self.live["gb_actions"])
         self.assertEqual(len(ungated), self.live["gb_readonly"])
+
+
+class VersionFootnote(unittest.TestCase):
+    def test_tools_md_names_the_package_version(self):
+        from gunstore_mcp import __version__
+        text = (ROOT / "TOOLS.md").read_text(encoding="utf-8")
+        self.assertEqual(re.findall(r"Matches version v([\d.]+)", text), [__version__])
 
 
 class NoStaleCountAnywhere(unittest.TestCase):

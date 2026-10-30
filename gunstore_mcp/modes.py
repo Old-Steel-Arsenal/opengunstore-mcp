@@ -35,7 +35,7 @@ class CpaModeRefused(RuntimeError):
 
 
 # Layer 1 — the EXACT cpa tools/list (asserted by set equality in tests;
-# 4 generic + 10 curated read-only + 6 shop-floor reads + 7 CPA reports = 27).
+# 4 generic + 12 curated read-only + 6 shop-floor reads + 7 CPA reports = 29).
 CPA_TOOL_NAMES: frozenset[str] = frozenset({
     # generic reads (frappe_run_method deliberately absent: reads and writes
     # are statically indistinguishable through it)
@@ -55,6 +55,10 @@ CPA_TOOL_NAMES: frozenset[str] = frozenset({
     "consignment_dealer_orders",
     # dry-run-only bound-book reconcile (boundbook_reconcile can apply, so it is NOT here)
     "boundbook_mismatches",
+    # order-exception reads: web stock legs still open / shipped but not disposed,
+    # and the open GunBroker orders with their stock lines
+    "web_order_exceptions",
+    "gb_pending_orders",
     # cash drawer + stocktake reads (tools/shopfloor.py) — owner decision: the
     # accountant reads the drawer's closes / entries / log / weekly report and a count's
     # variance; none of the shop-floor WRITES is here.
@@ -96,7 +100,21 @@ CPA_METHOD_ALLOWLIST: frozenset[str] = frozenset({
     # Bound-book reconcile, dry-run only: the POS method hard-wires dry_run=1 (no
     # write path). The writable sync_in_stock_from_boundbook is deliberately absent.
     "ffl_integrations.fastbound.inventory_sync.boundbook_mismatches",
+    # web_order_exceptions / gb_pending_orders: COUNTER_ROLES reads, the same POS gate
+    # as list_pending_dispositions. shipped_undisposed_orders is a new POS endpoint.
+    "ffl_woo_sync.woocommerce.order_audit.web_stock_legs_outstanding",
+    "ffl_woo_sync.woocommerce.order_audit.shipped_undisposed_orders",
+    "ffl_integrations.gunbroker.fulfillment.list_pending_gb_orders",
+    "ffl_integrations.gunbroker.fulfillment.get_dispose_stock_lines",
+    # gb_pending_orders(gunbroker_order): the banned-buyer badge (Customer read).
+    "ffl_core.customer_flags.banned_order_rows",
 })
+
+# Tools that look like reads but write as a side effect, so they may never join a
+# read-only surface: memberships(view='customer') settles a sign-up paid another
+# way, and refresh_4473_status writes the 4473 state flags it reports.
+NOT_PURE_READS: frozenset[str] = frozenset({"memberships", "refresh_4473_status"})
+assert not NOT_PURE_READS & CPA_TOOL_NAMES
 
 # Layer 3 — integration Settings doctypes whose get/list reads are refused in
 # cpa mode (config surface, no accounting purpose).

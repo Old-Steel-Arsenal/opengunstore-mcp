@@ -72,7 +72,8 @@ class RunMethodGuards(unittest.TestCase):
 			"ffl_woo_sync.woocommerce.fulfillment.dispose_web_order",
 			"ffl_integrations.shipstation.api.push_shipment",
 			"ffl_woo_sync.woocommerce.client_api.push_serial_now",
-			"ffl_integrations.payroc.api.charge_pos_invoice",
+			# the legacy payroc.api alias is refused outright now (test_catalog.py)
+			"ffl_integrations.payments.api.charge_pos_invoice",
 			"ffl_core.api.pos_consolidate.consolidate_pos_invoice_now",
 		):
 			with self.assertRaises(WriteRefused, msg=method):
@@ -123,12 +124,12 @@ class RunMethodGuards(unittest.TestCase):
 		self.assertEqual(self.client.calls, [])
 
 	def test_generic_tool_count_pinned(self):
-		# 10 generic + 52 curated + 5 reports = 67 total (full mode; cpa = 18,
+		# 11 generic (10 Frappe CRUD/method + list_pos_actions) + 52 curated + 5 reports = 67 total (full mode; cpa = 18,
 		# pinned by set equality in test_modes). TOOLS.md / CLAUDE.md / README.md
 		# quote 67 — move all three if this moves.
 		mcp = FakeMCP()
 		generic.register(mcp)
-		self.assertEqual(len(mcp.tools), 10)
+		self.assertEqual(len(mcp.tools), 11)
 
 
 if __name__ == "__main__":

@@ -276,8 +276,11 @@ def register(mcp: Any) -> None:
           deposit or pick-up ticket is open.
         * notify — tell the customer it is ready (via: Email sends the store's email now;
           Phone / Text only record that staff called or texted). The job must be Ready.
-        * take_payment — a payment towards an open job, any amount above 0, any time: opens
-          (or returns the open) deposit register ticket. Returns {pos_invoice}.
+        * take_payment — a payment towards an open job (Received / In Progress / Ready), any
+          amount above 0: opens a deposit register ticket. One open deposit ticket per job: if
+          one is already open it comes back unchanged at its own amount (already=true; the
+          amount asked for is ignored). Refused while the job's pick-up ticket is open:
+          complete or delete that first. Returns {pos_invoice, already, amount}.
         * pickup — hand the gun back. With work_performed / lines, they are confirmed first
           (lines omitted = the job's current charges are kept) and the job is marked Ready.
           With nothing billed and no deposit, the job is Picked Up at once (a logged gun's

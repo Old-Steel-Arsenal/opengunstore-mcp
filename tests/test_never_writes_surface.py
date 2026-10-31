@@ -29,7 +29,7 @@ from gunstore_mcp import config as config_mod
 from gunstore_mcp import safety, server
 from gunstore_mcp.frappe_client import get_client
 from gunstore_mcp.safety import MCP_NEVER_WRITES, WriteRefused
-from gunstore_mcp.tools import (compliance, curated, customers, distributor, generic, orders,
+from gunstore_mcp.tools import (compliance, curated, customers, distributor, generic, hr, orders,
                                 range_board, reports, services, shopfloor)
 
 DT = "GunBroker Settings"
@@ -110,7 +110,7 @@ def _creds():
 # (generic + curated only, while the server registers four — an unguarded writer
 # dropped into distributor.py went unnoticed by the static check below).
 _SURFACE_MODULES = (generic, curated, distributor, reports, shopfloor, range_board, orders,
-                    customers, services, compliance)
+                    customers, services, compliance, hr)
 
 
 def _surface():
@@ -361,7 +361,7 @@ class TheSurfaceIsTheWholeSurface(unittest.TestCase):
                      "sales_report", "inventory_count_finalize", "gb_push_serial",
                      "distributor_confirm_order", "range_book", "create_order",
                      "customer_manage", "gunsmith_job_action", "correct_firearm",
-                     "gb_update_listing", "list_pos_actions"):
+                     "gb_update_listing", "list_pos_actions", "hr_onboard"):
             self.assertIn(name, tools)
 
     def test_an_unguarded_writer_is_named_no_matter_which_module_defines_it(self):

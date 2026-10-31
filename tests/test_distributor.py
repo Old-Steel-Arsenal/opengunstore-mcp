@@ -273,7 +273,7 @@ class CpaModeUnchanged(unittest.TestCase):
     def test_cpa_allowlist_gains_nothing(self):
         from gunstore_mcp import modes
 
-        self.assertEqual(len(modes.CPA_TOOL_NAMES), 29)
+        self.assertEqual(len(modes.CPA_TOOL_NAMES), 30)
         self.assertFalse([n for n in modes.CPA_TOOL_NAMES if n.startswith("distributor_")])
 
 

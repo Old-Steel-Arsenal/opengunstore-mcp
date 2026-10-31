@@ -34,7 +34,7 @@ from . import __version__, audit
 from .auth import FrappeTokenVerifier
 from .config import HTTP, get_config, get_transport
 from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, FilteredMCP, get_mode
-from .tools import (compliance, curated, customers, distributor, generic, orders, range_board,
+from .tools import (compliance, curated, customers, distributor, generic, hr, orders, range_board,
                     reports, services, shopfloor)
 
 
@@ -105,6 +105,7 @@ def register_tools(mcp, mode: str | None = None) -> None:
     customers.register(target)
     services.register(target)
     compliance.register(target)
+    hr.register(target)
 
 
 def _http_settings() -> dict:

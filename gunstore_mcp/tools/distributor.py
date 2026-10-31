@@ -46,6 +46,44 @@ _ROUTER = "ffl_integrations.distributor.router."
 _WEB_ROUTER = "osa_dropship.web_router."
 _OPTIONS = "osa_dropship.options."
 _HUB = "ffl_integrations.distributor.hub."
+_RECEIVE = "ffl_integrations.distributor.receive_bridge."
+
+# A receive books a Purchase Receipt and pushes each firearm to the A&D book; the
+# gunicorn cap is 120 s, so a 30 s client timeout would report a failure while the
+# server goes on booking.
+_RECEIVE_TIMEOUT = 130
+
+
+def _only_order(incoming: Any, do_name: str) -> Any:
+    """Narrow list_incoming's {groups: [{orders: [...]}]} to one order (the POS
+    endpoint has no filter). Unrecognised shapes pass through untouched."""
+    if not isinstance(incoming, dict):
+        return incoming
+    for group in incoming.get("groups") or []:
+        for order in group.get("orders") or []:
+            if order.get("do_name") == do_name:
+                return {"order": order, "customer_name": group.get("customer_name"),
+                        "label": group.get("label")}
+    return {"order": None,
+            "note": f"{do_name} has nothing outstanding (not store-bound, not placed yet, "
+                    "or already received in full)."}
+
+
+def _check_receive_items(items: list) -> None:
+    """Shape check before any network call: every row names a line and a positive
+    whole quantity. Everything else (serial count, outstanding qty, $0 reason) is
+    the POS's to judge."""
+    if not isinstance(items, list) or not items:
+        raise ValueError("items must be a non-empty list of {line_name, qty, serials?, …}.")
+    for i, it in enumerate(items):
+        if not isinstance(it, dict):
+            raise ValueError(f"items[{i}] must be an object.")
+        if not str(it.get("line_name") or "").strip():
+            raise ValueError(f"items[{i}] needs line_name (from distributor_incoming or "
+                             "the staged invoice).")
+        qty = it.get("qty")
+        if isinstance(qty, bool) or not isinstance(qty, int) or qty < 1:
+            raise ValueError(f"items[{i}].qty must be a whole number >= 1, got {qty!r}.")
 
 ACTIONS_ENV = "GUNSTORE_MCP_DISTRIBUTOR_ACTIONS"
 _TRUTHY = frozenset({"1", "true", "yes", "on"})
@@ -214,6 +252,134 @@ def register(mcp: Any) -> None:
             _API + "create_orders",
             {"distributor": distributor, "lines": lines,
              "ship_context": {"mode": "stocking"}},
+        )
+
+    # ----------------------------------------------------------- receiving
+    #
+    # Not behind the action gate either: receiving books goods that physically
+    # arrived and places nothing with the distributor.
+
+    @mcp.tool()
+    def distributor_incoming(item_code: str | None = None,
+                             do_name: str | None = None) -> Any:
+        """Distributor parcels on their way to the store and what is still
+        outstanding on each, grouped by the customer order they are for (restock
+        last; outside-POS store invoices are listed under restock with do_name
+        blank and invoice_name set). Read-only.
+
+        * neither argument: the full incoming list — {groups: [{label,
+          customer_name, orders: [{do_name, invoice_name, status, tracking_numbers,
+          outstanding, lines: [{line_name, item_code, sku, is_firearm, outstanding,
+          unit_cost, serials}]}]}]}.
+        * do_name: just that order's entry ({order: …}, or order null when nothing
+          on it is outstanding).
+        * item_code: which waiting order lines a unit of this item that just
+          arrived could belong to, earliest order first ({candidates: [{do_name,
+          line_name, customer_name, outstanding, unit_cost, serials, …}]}). With
+          do_name as well, only that order's candidates.
+
+        `serials` on a line is what the distributor ECHOED — a hint, never what
+        gets booked. Receiving takes the serials read off the guns themselves.
+        Feed line_name into distributor_receive."""
+        client = get_client()
+        if item_code and item_code.strip():
+            result = client.call_method(_RECEIVE + "match_incoming",
+                                        {"item_code": item_code.strip()})
+            if do_name and isinstance(result, dict):
+                result = {**result, "candidates": [
+                    c for c in result.get("candidates") or []
+                    if c.get("do_name") == do_name]}
+            return result
+        result = client.call_method(_RECEIVE + "list_incoming", {})
+        return _only_order(result, do_name) if do_name else result
+
+    @mcp.tool()
+    def distributor_receive(
+        do_name: str | None = None, invoice_name: str | None = None,
+        items: list[dict] | None = None, warehouse: str | None = None,
+        confirm: bool = False,
+    ) -> Any:
+        """Receive a distributor parcel against its Distributor Order (do_name) or,
+        for a parcel ordered outside the POS, against its store invoice
+        (invoice_name) — exactly one of the two. Books stock and the A&D
+        acquisitions, marks the order line received, and hands the gun to the web
+        or counter order waiting for it. Use this, NOT receive_goods, for anything
+        a distributor shipped: receive_goods leaves the order open and the waiting
+        order never gets its gun.
+
+        Two steps:
+        1. Without items — prepare (no confirm). do_name: that order's outstanding
+           lines (same as distributor_incoming(do_name=…)). invoice_name: stages
+           the invoice — finds or creates the local Item for each line and returns
+           {lines: [{line_name, item_code, outstanding, unit_cost, serials, …}],
+           unmatched: [{sku, reason}], received}; an invoice whose only remaining
+           lines are $0 unmatched freebies is closed here (received=true).
+        2. With items — book it (confirm=true). items: [{line_name, qty, serials,
+           rate?, zero_cost_confirmed?, zero_cost_reason?, zero_cost_note?,
+           manufacturer?, model_name?, firearm_type?, caliber?, importer?,
+           sell_price?, is_antique?, year_made?, storage_location?, service_need?}].
+           * serials: one per unit for a firearm, READ OFF THE GUN — not the
+             distributor's echoed list. The POS refuses a count mismatch.
+           * rate defaults to the invoiced cost; a $0 line must carry
+             zero_cost_confirmed=1 and a zero_cost_reason.
+           * qty above what is outstanding on the line is refused.
+           warehouse: optional target warehouse.
+
+        Returns the receipt ({ok, name, total}) plus do_name, or invoice_name and
+        received (true once every invoice line is in).
+
+        NOT idempotent and slow (up to ~2 minutes). After a timeout or error,
+        re-read distributor_incoming before retrying — the receipt may have been
+        booked."""
+        if bool(do_name) == bool(invoice_name):
+            raise ValueError("Pass exactly one of do_name (a Distributor Order) or "
+                             "invoice_name (an outside-POS Distributor Invoice).")
+        client = get_client()
+        if items is None:
+            if do_name:
+                return _only_order(client.call_method(_RECEIVE + "list_incoming", {}),
+                                   do_name)
+            return client.call_method(_RECEIVE + "stage_invoice",
+                                      {"invoice_name": invoice_name},
+                                      timeout=_RECEIVE_TIMEOUT)
+        _check_receive_items(items)
+        target = do_name or invoice_name
+        require_confirm(f"receive {len(items)} line(s) on {target} into stock and the "
+                        "A&D book", confirm)
+        if do_name:
+            method, args = _RECEIVE + "receive_lines", {"do_name": do_name, "items": items}
+        else:
+            method, args = (_RECEIVE + "receive_invoice_lines",
+                            {"invoice_name": invoice_name, "items": items})
+        if warehouse:
+            args["warehouse"] = warehouse
+        return client.call_method(method, args, timeout=_RECEIVE_TIMEOUT)
+
+    @mcp.tool()
+    def distributor_ensure_item(sku: str, distributor: str | None = None,
+                                dropship: bool = False, confirm: bool = False) -> Any:
+        """Create (or find) the store Item for a distributor SKU, from any house
+        (distributor = the Distributor name; empty = the primary). Idempotent: an
+        existing Item (by UPC, barcode or SKU) is returned, not duplicated.
+
+        Leave dropship=false for restock or ship-to-store items. dropship=true
+        also marks the Item as drop-shipped by that house (unless another house or
+        a web listing already owns it), which changes web listing and web-order
+        routing. Not needed before distributor_create_draft_order, which finds or
+        makes the Items for its own lines. Creates an Item, so it asks for
+        confirm=true.
+
+        Returns {item_code, item_name, is_firearm, claimed_by} — claimed_by is the
+        house the Item's drop-ship mark names after the call (empty = none)."""
+        sku = (sku or "").strip()
+        if not sku:
+            raise ValueError("sku is required (find it with distributor_catalog_search).")
+        require_confirm(f"create/find the Item for {sku}"
+                        + (" and mark it drop-shipped" if dropship else ""), confirm)
+        return get_client().call_method(
+            _API + "ensure_dropship_item",
+            # claim defaults to 1 on the POS: always send it, or false would claim.
+            {"sku": sku, "distributor": distributor, "claim": 1 if dropship else 0},
         )
 
     # --------------------------------------------------------- queue actions

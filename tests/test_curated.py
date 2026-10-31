@@ -217,15 +217,6 @@ class CuratedTools(unittest.TestCase):
 
 	# ------------------------------------ C: compliance / FastBound (confirm)
 
-	def test_push_serial_to_fastbound(self):
-		with self.assertRaises(WriteRefused):
-			self.tools["push_serial_to_fastbound"]("SN1")
-		self.tools["push_serial_to_fastbound"]("SN1", confirm=True)
-		self.assertEqual(self._last(), (
-			"call_method", "ffl_integrations.fastbound.tasks.push_serial_to_fastbound",
-			{"serial": "SN1"},
-		))
-
 	def test_verify_supplier_ffl(self):
 		with self.assertRaises(WriteRefused):
 			self.tools["verify_supplier_ffl"]("SUP")
@@ -798,7 +789,7 @@ class CuratedTools(unittest.TestCase):
 		for name in (
 			"item_stock", "available_serials", "rsr_catalog_search", "boundbook_reconcile", "boundbook_mismatches",
 			"receive_goods", "add_stock", "set_stock", "toggle_service_need",
-			"push_serial_to_fastbound", "verify_supplier_ffl", "reverify_all_ffls",
+			"verify_supplier_ffl", "reverify_all_ffls",
 			"promote_to_item", "backfill_from_rsr", "set_serial_title",
 			"woo_push_serial", "woo_delist_serial",
 			# PR-4a: GunBroker listing-side channel
@@ -819,20 +810,23 @@ class CuratedTools(unittest.TestCase):
 			"return_consignment_lines", "cancel_consignment", "cancel_order",
 			# PR #224 increment: At-dealer price snapshot edit
 			"update_consignment_prices",
+			# channel tools (register_channels, called at the end of register)
+			"web_order_action", "web_order_exceptions", "woo_store_maintenance",
+			"gb_pending_orders", "gb_update_listing", "gb_record_payment",
+			"gb_order_action", "gb_dispose_order", "card_processor_test_connection",
 		):
 			self.assertIn(name, self.tools)
 
 	def test_curated_tool_count_pinned(self):
-		# This pins the CURATED bucket with the GunBroker actions ON. Total =
-		# 57 curated + 10 generic + 12 distributor + 7 reports + 30 shop-floor = 116, pinned in
-		# test_modes.py::test_full_mode_registers_the_whole_surface_including_the_cpa_surface.
-		# The DEFAULT surface is 3 lower here and 7 lower overall (both gates off).
-		# Moving any of these means moving README.md, CLAUDE.md and TOOLS.md.
-		self.assertEqual(len(self.tools), 61)
+		# This pins the CURATED bucket (register_channels included) with the GunBroker
+		# actions ON. The default is 4 lower here. The whole surface is pinned in
+		# test_modes.py and checked against the docs by tests/test_doc_counts.py.
+		self.assertEqual(len(self.tools), 69)
 
 
 class GunBrokerActionGate(unittest.TestCase):
-	"""gb_push_serial / gb_end_listing / gb_pull_orders are not registered unless
+	"""gb_push_serial / gb_end_listing / gb_pull_orders / gb_update_listing are not
+	registered unless
 	asked for.
 
 	confirm= catches a misfire. It does not catch an agent that has reasoned its
@@ -842,7 +836,7 @@ class GunBrokerActionGate(unittest.TestCase):
 	"""
 	# name -> the positional args that make a valid call (gb_pull_orders takes none)
 	WRITE_ARGS = {"gb_push_serial": ("SN1",), "gb_end_listing": ("SN1",),
-		"gb_pull_orders": ()}
+		"gb_pull_orders": (), "gb_update_listing": ("reprice", "SN1")}
 	WRITES = tuple(WRITE_ARGS)
 	READS = ("gb_test_connection", "gb_listing_status")
 

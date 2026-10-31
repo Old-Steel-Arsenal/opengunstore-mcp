@@ -63,6 +63,14 @@ MCP_NEVER_WRITES: dict[str, frozenset[str]] = {
         # money and irreversibility
         "end_strategy", "check_deposit_account", "card_checkout_enabled",
     }),
+    # Switching it off erases every stored customer DOB and ID number.
+    "FFL Settings": frozenset({"store_customer_id_numbers"}),
+    # Booking a job into the A&D book: gunsmith_job_action(action='log_bound_book').
+    "Gunsmith Work Order": frozenset({"log_in_bound_book"}),
+    # Turning a card processor on or off goes through payments.hub.toggle, which
+    # refuses a second active processor:
+    # frappe_run_method('ffl_integrations.payments.hub.toggle', ..., confirm=true).
+    "Payroc Settings": frozenset({"enabled"}),
 }
 
 _PW_TTL = 600.0  # re-describe a doctype's Password fields at most every 10 min
@@ -164,9 +172,10 @@ def _forbidden_hit(doctype: str, names) -> list[str]:
 def _refuse(doctype: str, hit: list[str]) -> None:
     raise WriteRefused(
         f"Refused: {hit} cannot be set through the MCP on '{doctype}'. "
-        f"These decide which GunBroker gets contacted, hold the credentials, or "
-        f"move money — they are changed in Desk by a person, deliberately, not "
-        f"in a tool call. Not writable here: {sorted(MCP_NEVER_WRITES[doctype])}."
+        f"These pick the live environment, hold credentials, move money, erase "
+        f"records or have a dedicated tool — a person changes them in Desk, or the "
+        f"tool does, not a raw write. Not writable here: "
+        f"{sorted(MCP_NEVER_WRITES[doctype])}."
     )
 
 

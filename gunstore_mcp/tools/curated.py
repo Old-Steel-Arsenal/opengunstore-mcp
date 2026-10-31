@@ -2,11 +2,12 @@
 ops. Thin wrappers over the generic backbone + the apps' whitelisted methods."""
 from __future__ import annotations
 
+import datetime as _dt
 import os
 from typing import Any, Literal
 
 from ..config import HTTP, _load_env, get_transport
-from ..frappe_client import get_client
+from ..frappe_client import FrappeAPIError, get_client
 from ..safety import (check_fields_writable, require_confirm, require_reason,
                       strip_passwords, stripped_note)
 
@@ -504,15 +505,7 @@ def register(mcp: Any) -> None:
 
     # ---- C. compliance / FastBound (writes) ----------------------------------
 
-    @mcp.tool()
-    def push_serial_to_fastbound(serial: str, confirm: bool = False) -> Any:
-        """Push a post-acquisition per-unit correction (manufacturer / importer) for
-        one already-booked firearm to FastBound, editing the bound-book item in place
-        (PUT /Items/{id}). No-op if the gun isn't in FastBound yet. confirm=true."""
-        require_confirm(f"push_serial_to_fastbound {serial}", confirm)
-        return get_client().call_method(
-            "ffl_integrations.fastbound.tasks.push_serial_to_fastbound", {"serial": serial}
-        )
+    # push_serial_to_fastbound moved to compliance.fastbound_serial_fix(action="push").
 
     @mcp.tool()
     def verify_supplier_ffl(supplier_name: str, confirm: bool = False) -> Any:
@@ -992,3 +985,496 @@ def register(mcp: Any) -> None:
                 file_path, doctype=doctype, docname=name,
                 fieldname=fieldname, is_private=is_private,
             )
+
+    register_channels(mcp)
+
+
+# ===================================================================== channels
+#
+# Web-order repairs, store-wide Woo sweeps, the GunBroker order lane and the card
+# processor probe. register() calls register_channels() last, so these share the
+# curated bucket and its GunBroker switch.
+#
+# Signatures checked against gunstore-pos develop (merge 6e1c546). One wrapped
+# method does not exist there yet and is coded against the planned POS endpoint:
+# ffl_woo_sync.woocommerce.order_audit.shipped_undisposed_orders() (no args).
+
+_WOO = "ffl_woo_sync.woocommerce."
+_GB = "ffl_integrations.gunbroker."
+_PAY = "ffl_integrations.payments."
+
+# The sweeps and backstops below are synchronous on the POS and can run for
+# minutes; a 30 s client timeout would report a failure while the server keeps
+# writing (the boundbook_reconcile lesson). gunicorn caps a request at 120 s.
+_LONG = 130
+
+# action -> (dotted method, takes woo_online_order, timeout)
+_WEB_ORDER_ACTIONS: dict[str, tuple[str, bool, int | None]] = {
+    "pickup": (_WOO + "pickup.pickup_web_order", True, None),
+    "book_invoice": (_WOO + "revenue.create_web_invoice_now", True, None),
+    "reconcile_refund": (_WOO + "refunds.reconcile_web_order_refund", True, None),
+    "retire_antique": (_WOO + "antique.retire_antique_web_order_now", True, None),
+    "run_backstop": (_WOO + "order_audit.run_web_revenue_backstop_now", False, _LONG),
+    "retry_serials": (_WOO + "tasks.retry_stuck_serial_reservations", False, _LONG),
+}
+
+# action -> the extra arguments it accepts (anything else given is refused)
+_STORE_SWEEP_ARGS: dict[str, frozenset[str]] = {
+    "backfill_attributes": frozenset({"serials", "item_codes"}),
+    "recategorize": frozenset({"under"}),
+    "audit_dangling_ids": frozenset({"batch_size"}),
+}
+
+# action -> {target kind: dotted method}; a kind absent from the map is refused
+_GB_LISTING_ACTIONS: dict[str, dict[str, str]] = {
+    "reprice": {"serial_no": _GB + "client_api.reprice_serial_now",
+                "item_code": _GB + "client_api.reprice_item_now"},
+    "replace_pictures": {"serial_no": _GB + "client_api.replace_pictures_now",
+                         "item_code": _GB + "client_api.replace_pictures_now"},
+    "sync_quantity": {"item_code": _GB + "client_api.sync_item_quantity_now"},
+    "clear_sold_unknown": {"serial_no": _GB + "client_api.clear_sold_unknown_now"},
+}
+
+_GB_UNIT_ACTIONS = frozenset({"assign_unit", "unassign_unit",
+                              "mark_unit_refunded", "undo_unit_refunded"})
+_GB_ORDER_METHODS: dict[str, str] = {
+    "assign_unit": _GB + "fulfillment.assign_gb_unit_serial",
+    "unassign_unit": _GB + "fulfillment.assign_gb_unit_serial",
+    "mark_unit_refunded": _GB + "fulfillment.mark_gb_unit_refunded",
+    "undo_unit_refunded": _GB + "fulfillment.mark_gb_unit_refunded",
+    "push_shipment": _GB + "fulfillment.push_gb_shipment",
+    "push_tracking": _GB + "fulfillment.push_tracking_now",
+    "retry_invoice": _GB + "revenue.create_gb_invoice_now",
+}
+
+_GB_PAYMENT_MODES = ("GunBroker Check", "GunBroker Card")
+
+# ffl_core.compliance.cr_transfer.CR_DETAIL_KEYS. The POS drops unknown keys and
+# then reports the real one as missing, so a typo'd key is refused here by name.
+_CR_DETAIL_KEYS = frozenset({
+    "license_number", "license_expiry", "contact_name", "premise_street",
+    "premise_street2", "premise_city", "premise_state", "premise_zip",
+})
+
+
+def _pick(choices, value: str, what: str) -> str:
+    key = (value or "").strip().lower()
+    if key not in choices:
+        raise ValueError(f"{what} must be one of {', '.join(choices)} (got {value!r}).")
+    return key
+
+
+def _iso_date(value: str | None, what: str) -> str | None:
+    """YYYY-MM-DD or None. The POS's getdate also takes 03/10/2026, which reads as
+    March or October depending on who typed it — on a bank deposit date that is a
+    wrong period, not a typo."""
+    if value is None or not str(value).strip():
+        return None
+    try:
+        return _dt.date.fromisoformat(str(value).strip()).isoformat()
+    except ValueError:
+        raise ValueError(f"Write {what} as YYYY-MM-DD (got {value!r}).") from None
+
+
+def _part(fn, *args, **kwargs) -> Any:
+    """One part of a multi-call read: a POS refusal becomes that part's answer
+    ({"error": ...}) instead of hiding the parts the caller may see."""
+    try:
+        return fn(*args, **kwargs)
+    except FrappeAPIError as exc:
+        return {"error": str(exc), "status": exc.status, "exc_type": exc.exc_type}
+
+
+def register_channels(mcp: Any) -> None:
+    # ------------------------------------------------- web orders beyond dispose
+
+    @mcp.tool()
+    def web_order_action(
+        action: Literal["pickup", "book_invoice", "reconcile_refund", "retire_antique",
+                        "run_backstop", "retry_serials"],
+        woo_online_order: str | None = None, confirm: bool = False,
+    ) -> Any:
+        """Web order actions beyond dispose_web_order. confirm=true.
+
+        Per order (woo_online_order required):
+        * pickup — hand an in-store-pickup order (store_pickup on its
+          pending_web_orders row) to the counter. A firearm order opens a DRAFT POS
+          Invoice, already paid by WooCommerce, with the serials carried over; run
+          start_4473 on it, then finish it with pos_ticket (submit). The order stays
+          in the Pending Order queue until that ticket is submitted. An order with
+          no regulated firearm is closed on the spot. Reply: {ok, mode:
+          "counter"|"closed", pos_invoice, order_status}. Order must be Pending
+          Fulfillment and addressed to this store's own FFL.
+        * book_invoice — retry the revenue Sales Invoice of a Transferred order
+          whose booking failed (Error Log / draft on a total mismatch).
+        * reconcile_refund — net the order's Sales Invoice against its WooCommerce
+          refunds (books the credit notes, or says it is already in sync).
+        * retire_antique — retry retiring an antique-only order (no bound-book entry).
+
+        Store-wide (woo_online_order refused; can run for up to two minutes):
+        * run_backstop — the 2-hourly revenue/stock sweep, now: books missing
+          revenue invoices and missing accessory stock legs. Reply {booked,
+          delivered, failed, held}.
+        * retry_serials — re-apply the serial WooCommerce holds to rows stuck on a
+          stale reservation error. Reply: retried / cleared / aged-out counts.
+
+        These are the repairs the POS error messages and web_order_exceptions name.
+        After a lost reply, re-read pending_web_orders or web_order_exceptions
+        instead of calling again. Counter roles."""
+        key = _pick(_WEB_ORDER_ACTIONS, action, "action")
+        method, per_order, timeout = _WEB_ORDER_ACTIONS[key]
+        order = (woo_online_order or "").strip()
+        if per_order and not order:
+            raise ValueError(f"{key} needs woo_online_order.")
+        if not per_order and order:
+            raise ValueError(f"{key} is store-wide and takes no woo_online_order — "
+                             "refusing rather than ignoring it.")
+        require_confirm(f"web_order_action {key} {order}".rstrip(), confirm)
+        kwargs = {"woo_online_order": order} if per_order else {}
+        if timeout:
+            return get_client().call_method(method, kwargs, timeout=timeout)
+        return get_client().call_method(method, kwargs)
+
+    @mcp.tool()
+    def web_order_exceptions(from_date: str | None = None,
+                             to_date: str | None = None) -> Any:
+        """Month-end web checks, read-only. Two lists:
+
+        * stock_legs_outstanding {invoices, count} — submitted web Sales Invoices
+          whose accessory stock never left (no Delivery Note) with a posting date
+          in from_date..to_date (YYYY-MM-DD; default the last 30 days, no upper
+          bound). Expect count 0 before closing a month: until it is, the Sales
+          Report's cost cannot be trusted against GL COGS. Fix with
+          web_order_action(run_backstop); what it cannot issue is handled by hand.
+        * shipped_not_disposed [{name, woo_order_id, customer_name, modified}] —
+          orders WooCommerce marks completed (shipped) that the POS still holds as
+          Pending Fulfillment: a firearm that left with no A&D disposition.
+          Reconcile the serial against ShipStation and FastBound — never guess it —
+          then dispose_web_order. Dates do not filter this list.
+
+        If the POS predates the shipped-not-disposed endpoint, that half comes back
+        as {"error": ...} and the other half is still answered. Counter roles."""
+        frm = _iso_date(from_date, "from_date")
+        to = _iso_date(to_date, "to_date")
+        client = get_client()
+        legs = client.call_method(_WOO + "order_audit.web_stock_legs_outstanding",
+                                  {"from_date": frm, "to_date": to})
+        # NEW POS endpoint (shares tasks._SHIPPED_UNDISPOSED_SQL with the alarm).
+        shipped = _part(client.call_method,
+                        _WOO + "order_audit.shipped_undisposed_orders", {})
+        steps = []
+        if isinstance(legs, dict) and legs.get("count"):
+            steps.append("stock legs outstanding: run web_order_action(action="
+                         "'run_backstop', confirm=true), then call this again.")
+        if isinstance(shipped, list) and shipped:
+            steps.append("shipped but not disposed: confirm each serial with "
+                         "ShipStation and FastBound, then dispose_web_order.")
+        return {"stock_legs_outstanding": legs, "shipped_not_disposed": shipped,
+                "next_steps": steps}
+
+    @mcp.tool()
+    def woo_store_maintenance(
+        action: Literal["backfill_attributes", "recategorize", "audit_dangling_ids"],
+        apply: bool = False, serials: list[str] | None = None,
+        item_codes: list[str] | None = None, under: list[str] | None = None,
+        batch_size: int | None = None, confirm: bool = False,
+    ) -> Any:
+        """Store-wide sweeps of the retail WooCommerce store. apply=false (default)
+        only REPORTS what would change; apply=true changes the store and needs
+        confirm=true. Run the report first. System Manager.
+
+        * backfill_attributes — re-push ONLY the Caliber / Condition / Manufacturer
+          / Model attributes of listed firearms (after a grade or is_used fix; any
+          other attribute on those products is removed). serials and/or item_codes
+          pick the products; with neither the report covers every live firearm, but
+          apply=true needs a list — it is synchronous, so batch by item_codes.
+        * recategorize — re-file products into their category-tree term (keeps
+          Clearance / Open Box). under = node slugs to limit it to. apply=true
+          queues a background job: the reply's queued=true is a receipt, read the
+          Error Log for refusals.
+        * audit_dangling_ids — find stored Woo product ids whose product was
+          deleted (404) — the follow-up to woo_reconcile's dangling list. apply=true
+          clears them (Comment + warning log each). batch_size 1..200 (default 50).
+
+        Arguments that do not belong to the action are refused."""
+        key = _pick(_STORE_SWEEP_ARGS, action, "action")
+        given = {"serials": serials, "item_codes": item_codes, "under": under,
+                 "batch_size": batch_size}
+        stray = sorted(k for k, v in given.items()
+                       if v is not None and k not in _STORE_SWEEP_ARGS[key])
+        if stray:
+            raise ValueError(f"{stray} do not apply to {key} — refusing rather than "
+                             "dropping them silently.")
+        if key == "backfill_attributes" and apply and not (serials or item_codes):
+            raise ValueError("backfill_attributes with apply=true needs serials or "
+                             "item_codes: a whole-store push is synchronous and would "
+                             "time out while the server keeps writing. Batch by item_codes.")
+        if apply:
+            require_confirm(f"woo_store_maintenance {key} apply", confirm)
+        if key == "backfill_attributes":
+            method = _WOO + "condition_backfill.backfill_condition_attributes"
+            kwargs = {"serials": serials, "item_codes": item_codes,
+                      "dry_run": 0 if apply else 1}
+        elif key == "recategorize":
+            method = _WOO + "categories.recategorize_store"
+            kwargs = {"site": "retail", "dry_run": 0 if apply else 1, "under": under}
+        else:
+            method = _WOO + "dangling.woo_audit_dangling_ids"
+            kwargs = {"site": "retail", "fix": 1 if apply else 0,
+                      "batch_size": 50 if batch_size is None else batch_size}
+        return get_client().call_method(method, kwargs, timeout=_LONG)
+
+    # ------------------------------------------------- GunBroker order lane
+    #
+    # Default-registered, outside GUNSTORE_MCP_GUNBROKER_ACTIONS: these work an
+    # order that is already sold. None of them creates, changes or ends a listing
+    # offer — that is what the switch is about. push_tracking does write to
+    # GunBroker (the tracking number the buyer is waiting for) and assign_unit
+    # takes the named gun off the other channels; both are fulfilment of a sale
+    # that has happened, and both are confirm-gated.
+
+    @mcp.tool()
+    def gb_pending_orders(gunbroker_order: str | None = None) -> Any:
+        """Open GunBroker orders — the third lane of the Pending Order page, which
+        pending_orders and pending_web_orders do not include. One card per order:
+        channel_stage (awaiting payment / ready to dispose / awaiting ship /
+        shipped), paid + paid_total vs order_total, assign_units (units of a model
+        listing still needing a gun; row = the row_name gb_order_action takes) with
+        assign_candidates, pending_serials, serial_errors, stock_units, is_cr +
+        cr_prefill, destination_ffl / ffl_expired / ships_direct, sales_invoice and
+        its state, ship_pushed. An order stays listed until its tracking number is
+        on GunBroker.
+
+        gunbroker_order: return just that card, plus banned_customer (the buyer is
+        a Banned customer — the POS does NOT refuse a GunBroker dispose for that;
+        stop and ask a manager) and stock_lines (where each loose stock line can be
+        taken from — the keys gb_dispose_order's locations uses) when it has loose
+        stock; {"found": false} when it is not open. Every GunBroker order action
+        takes its inputs from this card. Read-only; counter roles."""
+        client = get_client()
+        rows = client.call_method(_GB + "fulfillment.list_pending_gb_orders")
+        name = (gunbroker_order or "").strip()
+        if not name:
+            return rows
+        card = next((r for r in rows or [] if isinstance(r, dict)
+                     and r.get("gunbroker_order") == name), None)
+        if card is None:
+            return {"found": False, "gunbroker_order": name,
+                    "note": "Not an open GunBroker order (finished orders leave the "
+                            "list once tracking is on GunBroker)."}
+        # The Pending Order page's red badge; not a field on the card itself.
+        banned = _part(client.call_method, "ffl_core.customer_flags.banned_order_rows",
+                       {"gb_orders": [name]})
+        card = {**card, "banned_customer": name in (banned.get("gb") or [])
+                if "error" not in banned else banned}
+        if card.get("stock_units"):
+            card = {**card, "stock_lines": client.call_method(
+                _GB + "fulfillment.get_dispose_stock_lines", {"gunbroker_order": name})}
+        return card
+
+    @mcp.tool()
+    def gb_record_payment(
+        gunbroker_order: str,
+        mode_of_payment: Literal["GunBroker Check", "GunBroker Card"],
+        amount: float, reference_no: str | None = None,
+        received_on: str | None = None, replace_posted_receipt: bool = False,
+        confirm: bool = False,
+    ) -> Any:
+        """Record the payment banked for a GunBroker order — the fact the Dispose
+        gate opens on (GunBroker's own "paid" flag does not open it). No Payment
+        Entry yet: the values are replayed onto one when Dispose raises the invoice.
+
+        mode_of_payment 'GunBroker Check' (reference_no = cheque / money-order
+        number, required) or 'GunBroker Card' (refused while no card gateway is
+        connected). amount = what was actually banked; a difference from the order
+        total is flagged, not refused. received_on = the day it went INTO the bank,
+        YYYY-MM-DD (default today, never future). replace_posted_receipt=true to
+        record over an order whose receipt is already posted (alerted on).
+        Reply {ok, mode_of_payment, amount, received_on, difference}. Counter
+        roles. confirm=true."""
+        mode = (mode_of_payment or "").strip()
+        if mode not in _GB_PAYMENT_MODES:
+            raise ValueError(f"mode_of_payment must be one of {', '.join(_GB_PAYMENT_MODES)} "
+                             f"(got {mode_of_payment!r}).")
+        if amount is None or amount <= 0:
+            raise ValueError("amount must be what was banked, above 0.")
+        ref = (reference_no or "").strip() or None
+        if mode == "GunBroker Check" and not ref:
+            raise ValueError("A GunBroker Check needs reference_no (the cheque or "
+                             "money-order number) — it ties the deposit to the bank statement.")
+        received = _iso_date(received_on, "received_on")
+        require_confirm(f"gb_record_payment {gunbroker_order} {mode} ${amount}", confirm)
+        return get_client().call_method(
+            _GB + "fulfillment.mark_payment_received",
+            {"gunbroker_order": gunbroker_order, "mode_of_payment": mode,
+             "amount": amount, "reference_no": ref, "received_on": received,
+             "replace_posted_receipt": 1 if replace_posted_receipt else 0},
+        )
+
+    @mcp.tool()
+    def gb_order_action(
+        gunbroker_order: str,
+        action: Literal["assign_unit", "unassign_unit", "mark_unit_refunded",
+                        "undo_unit_refunded", "push_shipment", "push_tracking",
+                        "retry_invoice"],
+        row_name: str | None = None, serial_no: str | None = None,
+        confirm: bool = False,
+    ) -> Any:
+        """Work a sold GunBroker order (inputs from gb_pending_orders). confirm=true.
+
+        Unit actions (row_name required = assign_units[].row, "<gb item id>:<unit>";
+        the reply carries the refreshed card as "row"):
+        * assign_unit (serial_no required) — name the gun for one unit of a model
+          listing. RESERVES the gun and takes it off the other channels; naming a
+          different gun swaps them. Refused for another model, a customer's gun, one
+          not free, or (Type 03 orders) one not old enough for C&R.
+        * unassign_unit — make the unit an open claim again (releases its gun).
+        * mark_unit_refunded — the buyer was refunded for this unit on GunBroker: no
+          gun, no bound-book entry, no invoice line (releases a named gun).
+        * undo_unit_refunded — undo that mark.
+
+        Order actions (row_name / serial_no refused):
+        * push_shipment — push the paid order to ShipStation to buy the label
+          (Dispose's gates apply; a C&R order not yet verified must Dispose first).
+        * push_tracking — write the label's tracking number back to GunBroker now
+          (after Dispose). {ok: false, reason} when there is no live label yet.
+        * retry_invoice — retry the revenue booking of a disposed order whose
+          invoice failed, stopped in Draft, or posted without its receipt.
+
+        Check banned_customer on the single-order card first. Counter roles."""
+        key = _pick(_GB_ORDER_METHODS, action, "action")
+        row = (row_name or "").strip()
+        serial = (serial_no or "").strip()
+        if key in _GB_UNIT_ACTIONS and not row:
+            raise ValueError(f"{key} needs row_name (assign_units[].row on the "
+                             "gb_pending_orders card).")
+        if key not in _GB_UNIT_ACTIONS and row:
+            raise ValueError(f"{key} acts on the whole order and takes no row_name.")
+        if key == "assign_unit" and not serial:
+            raise ValueError("assign_unit needs serial_no (to unassign, use "
+                             "action='unassign_unit').")
+        if key != "assign_unit" and serial:
+            raise ValueError(f"{key} takes no serial_no — refusing rather than ignoring it.")
+        require_confirm(f"gb_order_action {key} {gunbroker_order} {row}".rstrip(), confirm)
+        kwargs: dict[str, Any] = {"gunbroker_order": gunbroker_order}
+        if key in ("assign_unit", "unassign_unit"):
+            kwargs.update(row_name=row, serial_no=serial)
+        elif key in ("mark_unit_refunded", "undo_unit_refunded"):
+            kwargs.update(row_name=row, refunded=1 if key == "mark_unit_refunded" else 0)
+        return get_client().call_method(_GB_ORDER_METHODS[key], kwargs)
+
+    @mcp.tool()
+    def gb_dispose_order(
+        gunbroker_order: str, locations: dict[str, str] | None = None,
+        cr_details: dict[str, str] | None = None, confirm: bool = False,
+    ) -> Any:
+        """Book the bound-book exit of a paid GunBroker order (the Dispose action):
+        one submitted FFL Transfer disposition per regulated gun (each issues its
+        stock-out and queues its FastBound push), antiques issued out of stock with
+        no disposition, loose stock issued, then the revenue invoice raised (a
+        failure there keeps the dispositions — retry with gb_order_action
+        retry_invoice). Idempotent per {serial, order}.
+
+        VERIFY the destination FFL and the named serials on the gb_pending_orders
+        single-order card first, and stop if banned_customer is true. locations: {stock line id: Storage
+        Location} from the card's stock_lines (a line left out goes to the "to
+        confirm" list). cr_details, Type 03 (C&R) orders only, read off the licence:
+        {license_number (1-23-456-03-7C-89012), license_expiry, contact_name,
+        premise_street, premise_street2?, premise_city, premise_state, premise_zip}
+        — premises must match the ship-to state/ZIP. Reply {ok, dispositions,
+        disposed_count, retired, issued, sales_invoice, invoice_status}. Counter
+        roles. confirm=true."""
+        if cr_details:
+            unknown = sorted(set(cr_details) - _CR_DETAIL_KEYS)
+            if unknown:
+                raise ValueError(f"cr_details keys {unknown} are not C&R fields; use "
+                                 f"{', '.join(sorted(_CR_DETAIL_KEYS))}.")
+        require_confirm(f"gb_dispose_order {gunbroker_order}", confirm)
+        return get_client().call_method(
+            _GB + "fulfillment.dispose_gb_order",
+            {"gunbroker_order": gunbroker_order, "cr_details": cr_details or None,
+             "locations": locations or None},
+        )
+
+    # ------------------------------------------------- card processor probe
+
+    @mcp.tool()
+    def card_processor_test_connection(processor: str | None = None,
+                                       list_terminals: bool = False) -> Any:
+        """Why the card terminal will not charge. Read-only.
+
+        overview: every card processor with enabled (its switch) vs ready (switch
+        on AND credentials present — on-but-not-ready is its own failure), health
+        timestamps, and the card-on-file setting. probes: {code: {checks: [{label,
+        ok, detail}]}} — a live, read-only probe of each processor (ok null = not
+        applicable, e.g. switched off). processor = one registry code (e.g.
+        "payroc") to probe only that one. list_terminals=true also asks the ACTIVE
+        processor which terminals its credentials may use ({"skip": true} when none
+        is switched on and configured).
+
+        overview and probes need System Manager, terminals a manager role; a part
+        this user may not see comes back as {"error": ...} with the rest still
+        answered. Switching a processor on/off is not done here."""
+        client = get_client()
+        overview = _part(client.call_method, _PAY + "hub.overview")
+        if processor:
+            codes = [processor.strip()]
+        elif isinstance(overview, dict) and "error" not in overview:
+            codes = [p.get("code") for p in overview.get("processors") or [] if p.get("code")]
+        else:
+            codes = []
+        probes = {c: _part(client.call_method, _PAY + "hub.test_connection",
+                           {"processor": c}) for c in codes}
+        out: dict[str, Any] = {"overview": overview, "probes": probes}
+        if list_terminals:
+            out["terminals"] = _part(client.call_method, _PAY + "api.list_terminals")
+        return out
+
+    # ------------------------------------------------- GunBroker listing writes
+    #
+    # Behind GUNSTORE_MCP_GUNBROKER_ACTIONS with gb_push_serial / gb_end_listing /
+    # gb_pull_orders (see register()): each changes a live listing offer — its
+    # price, photos, quantity (0 ends it) or the "may already be sold" guard.
+    if gunbroker_actions_enabled():
+
+        @mcp.tool()
+        def gb_update_listing(
+            action: Literal["reprice", "replace_pictures", "sync_quantity",
+                            "clear_sold_unknown"],
+            serial_no: str | None = None, item_code: str | None = None,
+            note: str | None = None, confirm: bool = False,
+        ) -> Any:
+            """Change a LIVE GunBroker listing now. Exactly one of serial_no (a
+            per-gun listing) or item_code (a model listing). confirm=true.
+
+            * reprice — send the current price (Serial No.sell_price, or the Item's
+              web price) and read it back: trust "verified": true, nothing less.
+            * replace_pictures — re-send the photos a new push would send (after a
+              photo or watermark change). GunBroker keeps its original search
+              thumbnail. Needs SYSTEM_ROLES on the POS.
+            * sync_quantity — item_code only: push the model's free stock count.
+              At 0 this ENDS the listing (GunBroker refuses a quantity of 0).
+            * clear_sold_unknown — serial_no only: lift the "may already be sold on
+              GunBroker" flag after checking GunBroker; note (required) says what
+              was checked and is recorded on the serial. This flag is what stops a
+              gun being sold twice.
+
+            A skip dict ({"ok": false, "skipped": ...}) is a normal answer — read
+            its message rather than retrying."""
+            key = _pick(_GB_LISTING_ACTIONS, action, "action")
+            serial = (serial_no or "").strip()
+            item = (item_code or "").strip()
+            if bool(serial) == bool(item):
+                raise ValueError("give exactly one of serial_no or item_code.")
+            kind = "serial_no" if serial else "item_code"
+            if kind not in _GB_LISTING_ACTIONS[key]:
+                raise ValueError(f"{key} takes {' or '.join(_GB_LISTING_ACTIONS[key])} "
+                                 f"only, not {kind}.")
+            target = serial or item
+            if key != "clear_sold_unknown" and note is not None and note.strip():
+                raise ValueError(f"note applies to clear_sold_unknown only, not {key}.")
+            kwargs: dict[str, Any] = {kind: target}
+            if key == "clear_sold_unknown":
+                kwargs["note"] = require_reason(f"gb_update_listing {key} {target}", note)
+            require_confirm(f"gb_update_listing {key} {target}", confirm)
+            return get_client().call_method(_GB_LISTING_ACTIONS[key][kind], kwargs)

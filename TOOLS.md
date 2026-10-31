@@ -35,6 +35,10 @@ Every Woo-related tool takes an optional `site` argument; the only value is `ret
 | Consignment queues | `consignment_queue`, `consignment_dealer_orders` | See section 5 |
 | Financial and tax reports | `sales_report`, `gl_entries`, `financial_statement`, `tax_liability`, `ar_ap_summary`, `inventory_receipts`, `payroc_transactions` | Accountant report kit, available in every mode; see section 10 |
 | Search the RSR wholesale catalog | `rsr_catalog_search` | By keyword, UPC, RSR stock number or manufacturer part number. This is not store inventory |
+| The morning briefing (sales, open 4473s, pickups, stock, drawer, A&D gaps, arriving parcels) and the home page's "needs attention" counts | `store_overview` | Each count names the tool or report that lists its rows. `fresh_ad=true` recounts the A&D block now |
+| A customer's standing, alerts, family, IDs and agreements | `customer_overview` | See section 4c |
+| The gunsmith queue, memberships | `gunsmith_jobs`, `memberships` | See section 4d. `memberships(view=customer)` is not purely a read: it activates a sign-up whose invoice was since paid another way |
+| Search the FFL directory | `ffl_directory_search` | By licence number (exact), business name or city; local records win over the national listing |
 | Run any report | `frappe_run_report` | e.g. `Sales Report` (revenue and margin; `filters.view` is `Order`, `Order Detail` or `Product`), `Pending 4473 Orders`, `Pending Transfer Pickups` |
 | Read any record | `frappe_list_documents`, `frappe_get_document` | General-purpose queries; see section 9 |
 
@@ -49,9 +53,12 @@ Every Woo-related tool takes an optional `site` argument; the only value is `ret
 | First full listing (model plus all serials) | `woo_reconcile` | yes | |
 | Give one gun its own listing title | `set_serial_title` | no | Writes `Serial No.item_name`; takes effect on the next push |
 | Check the store connection | `woo_test_connection` | no | Read-only probe |
+| Store-wide sweeps: re-push firearm attributes, re-file categories, find IDs pointing at deleted products | `woo_store_maintenance(action=backfill_attributes\|recategorize\|audit_dangling_ids)` | only with `apply=true` | `apply=false` (default) reports only. Applying `backfill_attributes` needs `serials` or `item_codes` (it is synchronous). System Manager |
+| See a gun's or a model's photo gallery | `photo_gallery` | no | Rows in publish order with the `row_name` the edit takes; for a model, which of its guns still need photos |
+| Arrange photos | `edit_photo_gallery(action=add\|reorder\|set_primary\|set_caption\|remove)` | `remove`, and `add` of a `/private/` file | `add` takes files already on the POS and makes them public. On the remote connector a person uploads the files in Desk first |
 
-**Photos.** `upload_attachment` uploads one file at a time. Product images meant for the
-storefront must be uploaded with `is_private=false`. The server does not resize images; resize
+**Photos.** `upload_attachment` uploads one file at a time (local server only). Product images meant for the
+storefront must be uploaded with `is_private=false`, or added with `edit_photo_gallery`, which makes them public. The server does not resize images; resize
 large photos before uploading, because oversized originals can make the push time out.
 
 ## 2b. GunBroker (a third sales channel)
@@ -59,8 +66,10 @@ large photos before uploading, because oversized originals can make the push tim
 Fixed-price Buy Now listings, priced from `Serial No.sell_price`. Listings are per gun;
 there is no "push a whole model" operation.
 
-2 read-only GunBroker tools (`gb_test_connection` and `gb_listing_status`) are always registered.
-The three write actions (`gb_push_serial`, `gb_end_listing`, `gb_pull_orders`) are **not
+6 always-registered GunBroker tools: the reads `gb_test_connection`, `gb_listing_status` and
+`gb_pending_orders`, and the order-side writes `gb_record_payment`, `gb_order_action` and
+`gb_dispose_order`. The 4 GunBroker write actions that change a listing offer
+(`gb_push_serial`, `gb_end_listing`, `gb_update_listing`, `gb_pull_orders`) are **not
 registered at all** unless the server is started with `GUNSTORE_MCP_GUNBROKER_ACTIONS=1`.
 `confirm=` stops a slip of the finger, but it cannot stop an agent that has talked itself
 into confirming. A tool that is absent from the list cannot be talked into anything.
@@ -69,7 +78,13 @@ Push, end and pull-orders share one switch on purpose. An instance that can list
 cannot end the listing is in the most dangerous position: the gun sells at the counter, the
 assistant has no tool to end the listing, and a second buyer can still buy it.
 `gb_pull_orders` sits behind the same switch because importing an order creates POS
-documents and reserves the gun.
+documents and reserves the gun. `gb_update_listing` changes a live offer (price, photos,
+quantity, the "may already be sold" guard), so it is behind it too.
+
+The order-side tools stay outside the switch: `gb_record_payment`, `gb_order_action`
+(including `push_tracking`, which writes tracking to GunBroker, and `assign_unit`, which
+reserves the gun and announces its exit) and `gb_dispose_order` fulfil an order that is
+already sold. They never create, change or end a listing offer, and they all take `confirm`.
 
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
@@ -77,6 +92,11 @@ documents and reserves the gun.
 | End **one gun's** listing | `gb_end_listing` | yes (and switch on) | Check `confirmed`, not `ok`. `confirmed=false` always comes with `pending_manual` and `gb_url`, meaning the gun can still be bought on GunBroker and someone must end it on the site |
 | Listing status of one gun | `gb_listing_status` | no | `state` is the POS view (seven states); `remote` is what GunBroker reports right now |
 | Check the GunBroker connection | `gb_test_connection` | no | The `sandbox` field in the reply says which environment answered |
+| Change a live listing: reprice, replace photos, sync a model's quantity, lift the "may already be sold" flag | `gb_update_listing(action, serial_no\|item_code)` | yes (and switch on) | `sync_quantity` at 0 ends the listing. `clear_sold_unknown` needs a `note` saying what was checked on GunBroker. `replace_pictures` needs SYSTEM_ROLES |
+| Open GunBroker orders (the Pending Order page's third lane) | `gb_pending_orders(gunbroker_order?)` | no | One card per order: stage, paid vs total, units still needing a gun, C&R prefill, destination FFL, invoice state. With `gunbroker_order` also the stock lines for `gb_dispose_order`. Also on the cpa surface |
+| Record the payment banked for an order | `gb_record_payment` | yes | `GunBroker Check` (needs `reference_no`) or `GunBroker Card`; `received_on` is the bank date (YYYY-MM-DD). This is what opens the Dispose gate |
+| Assign or release a unit's gun, mark a unit refunded, push the shipment or tracking, retry the invoice | `gb_order_action` | yes | Unit actions take the card's `row_name`. `assign_unit` reserves the gun |
+| **Dispose** a paid GunBroker order | `gb_dispose_order` | yes | One FFL Transfer disposition per gun plus the FastBound push, then the revenue invoice. Check the destination FFL and serials on the card first; Type 03 orders need `cr_details` |
 | Run an order poll now | `gb_pull_orders` | yes (and switch on) | No arguments. The reply is a receipt, not a result: `{"queued": true}` only says the job was queued (a poll already running is joined, not duplicated) and carries no order count. Look at the GunBroker Order list and the Error Log for the outcome. Moving the poll's start point (`orders_since_override`) is only possible in the Desk, because winding it back re-imports old orders and re-reserves guns |
 
 **Sandbox versus live cannot be chosen from here.** It is decided solely by
@@ -111,12 +131,17 @@ where the reason it was ended is visible.
 
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
+| Check a receive before booking it | `receive_goods_preview(payload?)` | no | Without a payload: the valid `source` values and seller payment methods. With the exact `receive_goods` payload: what Submit will pay a private seller, unknown item codes, serials already on file |
+| Buy a gun from a walk-in seller and pay them now | `trade_in_intake` | yes | Makes the gun's Used Item, books the acquisition and FastBound push, receives the stock and pays the seller (Cash comes out of the drawer; other methods need `payout_reference`). Store credit inside a cart is not offered |
+| Receive a **distributor** parcel | `distributor_incoming`, then `distributor_receive` | booking only | See section 9b. Use this, not `receive_goods`, for anything a distributor shipped, or the waiting order never gets its gun |
 | Receive goods (including firearms) | `receive_goods` | yes | Creates and submits a Purchase Receipt; each firearm gets an FFL Acquisition and is pushed to FastBound. Firearms must come in this way, not through `add_stock`. A paid purchase from a private seller (`acquisition_source="Individual"` with a blank, `Purchase` or `Individual` type and a cost) needs `seller_payment_method` (`Cash`, `Zelle`, `Check` or `ACH`) plus `seller_payment_reference` unless Cash. The POS books the payment in the same transaction and returns `seller_payment`; without those fields the receipt is refused. Consignment, gunsmithing, transfers and dealer purchases take no payment |
 | Add stock for a plain product | `add_stock` | yes | Ammunition, accessories and other non-serialized items |
 | Set a counted quantity | `set_stock` | yes | Leaves an audit record with the reason |
 | Flag or clear "needs gunsmith" | `toggle_service_need` | yes | Opens or closes the gunsmith ToDo |
 | Turn an RSR catalog row into a sellable Item | `promote_to_item` | yes | Manufacturer, model, caliber and image carried over |
 | Fill an Item's empty fields from RSR data | `backfill_from_rsr` | yes | Fills blanks only; never overwrites |
+| Per-gun cost of a model's in-stock guns | `firearm_costs` | no | Read before `correct_firearm(action='cost')`; `cash_payout` says whether a payout difference can be booked. Stock Manager |
+| Correct a gun's acquisition cost or a mistyped serial | `correct_firearm(action=cost\|serial_number)` | yes, with `reason` | `cost` books a Stock Reconciliation (and, with `payout_was_different`, the payout difference); `serial_number` renames the Serial No, its A&D record and the FastBound item together. Stock Manager |
 
 ## 3b. Stocktake, cash drawer, storage locations (`tools/shopfloor.py`)
 
@@ -225,9 +250,53 @@ The three board writes are also in `frappe_run_method`'s always-confirm list.
 | **Cancel a counter or dealer transfer order** | `cancel_order` | yes, with `reason` | Safe cascade: reverses the disposition, reverses stock, queues the bound-book deletion, voids the ShipStation shipment and refunds what was collected (`refund_mode`, `refund_reference`). Use this instead of reversing documents by hand |
 | Check the ShipStation connection | `shipstation_test_connection` | no | Read-only probe |
 
+| Web-order steps beyond dispose: hand a pickup order to the counter, retry its revenue invoice, reconcile a partial Woo refund, retire an antique order, run the revenue backstop, retry stuck serial reservations | `web_order_action` | yes | `pickup` opens a paid register ticket for a firearm order; finish it with `start_4473` and `pos_ticket(submit)` |
+| Month-end web checks | `web_order_exceptions` | no | Web invoices whose stock never left, and orders shipped in WooCommerce but not disposed here. Also on the cpa surface |
+
 Typical flow: `pending_orders` to see the queue, `record_payment` if money is short,
 `dispose_order`, then `push_shipment`. For web orders: `pending_web_orders`, then
 `dispose_web_order` (no shipment push).
+
+## 4b. Counter orders and register tickets (`tools/orders.py`)
+
+The Create Order page, the Pending Order buttons and the register. None of these is on the
+cpa surface: they read and write customer and ticket data.
+
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| Check an order before taking it | `preview_order` | no | Same `items` shape as `create_order`: whether each serial is free and its tag price, line costs, tax rate per item, whether a price below list needs a manager, the customer's tax exemption. With `sales_invoice` it shows an existing order's editable form |
+| Take a counter, phone or dealer transfer order | `create_order` | yes (not for `save_as_draft=true`) | Books the Sales Order and Sales Invoice and, with `payment`, the payment. A firearm order needs `destination_ffl`. `sku`-only lines get their Item made on create. Zelle, ACH and Check/Money Order need `transaction_number` |
+| Edit a pending order | `update_order` | yes | Reads the current order, replaces only the keys in `changes` and sends the whole order back (cancel-and-rebuild, only before disposition or shipment push). `payment` and `cr_license` cannot be changed here |
+| The Pending Order buttons: serve a late line from stock, re-source a stalled line, open the pickup ticket, resend the agreement | `pending_order_action` | yes | Releasing distributor legs stays on `frappe_run_method` with confirm |
+| Tickets parked at the register | `pos_draft_orders` | no | What each still needs: due, card status, held, paid online, 4473 and NICS status |
+| Finish a register ticket | `pos_ticket(action=open\|tender\|start_card\|poll_card\|cancel_card\|submit)` | yes, except `poll_card` | `open` needs an open register shift. Credit Card goes through the terminal when a processor is live. `submit` runs the POS's own 4473, price-approval and deposit guards; a return's card refund runs once |
+| Charge a card on the counter terminal against a submitted Sales Invoice | `card_terminal_charge(action=start\|poll\|cancel)` | `start` and `cancel` | A second `start` returns the charge already waiting. `{skip: true}` means no processor is live: use the standalone terminal and `record_payment` |
+| A customer's cards on file | `saved_cards` | no | Brand, last four, expiry; never the token |
+| Charge a card on file with no customer present | `charge_saved_card` | yes | Managers only. If the answer is lost, call again with the same arguments: the POS looks the charge up instead of charging twice |
+
+`pos_ticket` needs a POS release that ships `ffl_core.api.pos_ticket.open_ticket` (for
+`open`) and `ffl_integrations.payments.api.card_tender_mode` (for card tenders); an older
+POS answers those steps with its own "method not found" error.
+
+## 4c. Customers and agreements (`tools/customers.py`)
+
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| Check a customer before a sale, trade-in or transfer | `customer_overview(customer, cart?\|sale?)` | no | Status (banned, or served under a manager's override), alerts, tags, family, expired IDs, agreements; with a cart or a sale, which agreements it still needs signed |
+| Find existing customers | `customer_find` | no | By email, phone, ID number, or first and last name together; up to 10 rows with what matched |
+| Merge a duplicate, override a ban, set the status, add a staff alert | `customer_manage(action=merge\|override_ban\|set_status\|add_alert)` | yes | Manager actions. A merge is irreversible: compare both with `customer_overview` first |
+| Send an agreement to sign | `agreement_request(deliver=email\|tablet\|none)` | yes | Never returns the signing link or QR code. `frappe_run_method` refuses `request_agreement` without one of these deliveries |
+| Void an agreement copy, or record a paper signature | `agreement_manage(action=void\|record_paper)` | yes | Managers only. `record_paper` takes a scan already attached to the Customer Agreement |
+
+## 4d. Gunsmith and memberships (`tools/services.py`)
+
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| The gunsmith queue, or one job | `gunsmith_jobs(search?\|work_order?)` | no | What each job owes, deposits held, open register tickets, whether the work authorization is signed; one job says whether an ID is on file for the bound book |
+| Take a gun in for repair | `gunsmith_intake` | yes | Opens the work order. `log_in_bound_book=true` also books it in the A&D book now (needs caliber, firearm type and the customer's ID). No payment is taken here |
+| Move a job: start, ready, notify, take a payment, pick up, cancel, refund the deposit, log in the bound book | `gunsmith_job_action` | yes | `take_payment` and `pickup` leave a register ticket: finish it with `pos_ticket`. `take_payment` needs a POS release with `ffl_core.gunsmith.open_deposit`; it returns `{pos_invoice, already, amount}` (an already-open deposit ticket comes back at its own amount) and is refused while the job's pick-up ticket is open |
+| Memberships: plans and totals, the roster, one customer's | `memberships(view=overview\|members\|customer)` | no | `view=customer` can settle a sign-up that was paid another way, so this tool is never on a read-only surface |
+| Sell and manage memberships | `membership_action` | yes | `start`, `invoice`, `invoice_renewal`, `retry_card`, `set_auto_renew`, `change_card`, `cancel`, `drop` (discard a Pending sign-up). Take the invoice's payment with `record_payment` or `card_terminal_charge` |
 
 ## 5. Consignment out (the whole At Dealer lifecycle)
 
@@ -268,7 +337,12 @@ portal dealer's session identity and are refused when called with an admin key (
 | Verify an FFL number (eZ Check) | `atf_verify_ffl` | yes | Verifies online and stores or updates the ATF FFL Record |
 | Verify a supplier's FFL | `verify_supplier_ffl` | yes | Also updates the verification status on the supplier |
 | Re-verify every FFL supplier | `reverify_all_ffls` | yes | Bulk |
-| Correct manufacturer or importer on a gun already in the book | `push_serial_to_fastbound` | yes | Edits the FastBound book entry in place |
+| Verify a **customer's** (dealer's) FFL | `verify_customer_ffl` | yes | Stamps the eZ Check result on the Customer; dispose and dealer shipments need a Verified, unexpired licence |
+| Re-check a register ticket's 4473 and get the next step | `refresh_4473_status` | no | Only restores flags the committed bound-book entries already prove. It writes those flags, so it is never on a read-only surface |
+| Close out a 4473 the normal flow left open | `resolve_4473(action=attest_paper\|redo\|abandon)` | yes | `attest_paper` (Paper 4473 Mode) records the signed-in user as the attester, so it runs on the remote connector only. `redo` and `abandon` are manager actions with a reason |
+| Compare guns' identity with the bound book | `fastbound_serial_diff` | no | 1 to 25 serials, one live FastBound lookup each |
+| Fix one gun's bound-book identity | `fastbound_serial_fix(action=match\|apply\|push)` | yes | `apply` takes the diffs `fastbound_serial_diff` returned, so a value that changed since is skipped. `push` sends a corrected manufacturer or importer to FastBound |
+| Clear a submitted A&D record the bound book never got | `boundbook_record_fix(action=retry_push\|link_existing\|mark_not_in_book\|clear_mark)` | yes | The list is `store_overview`'s `ad.records`. Never `retry_push` a record the book already has: `link_existing` it |
 | Reconcile: disposed in FastBound but still in stock here | `boundbook_reconcile` | only with `apply=true` | Reports only by default; does not change stock |
 | Report guns disposed in FastBound but still in stock here (read-only) | `boundbook_mismatches` | no | The `boundbook_reconcile` dry run as its own tool: the POS method has no write path, so it is also available in cpa mode. Needs a POS release with `inventory_sync.boundbook_mismatches` |
 | Check the FastBound connection | `fastbound_test_connection` | no | Read-only |
@@ -276,17 +350,21 @@ portal dealer's session identity and are refused when called with an admin key (
 ## 7. Distributor catalogs
 
 Catalog and stock feeds are synchronised server-side through the data service configured in
-Data Service Settings (for both RSR and Sports South); the POS has no manual sync switch.
+Data Service Settings (for both RSR and Sports South). A local catalog can be re-synced now
+with `frappe_run_method('ffl_integrations.distributor.hub.sync_now', ...)` (System Manager).
 Probe a distributor with `distributor_test_connection`; catalog health is on the Catalog
 Service page in the Desk.
 
 ## 8. Settings and files
 
-| Task | Tool | Notes |
-|---|---|---|
-| Read an integration's configuration | `get_settings` | `ffl`, `fastbound`, `rsr`, `payroc`, `woocommerce`, `shipstation`, `gunbroker`, `sports_south`, `lipseys` or `data_service` |
-| Change configuration (non-secret fields) | `update_settings` | Password and key fields are stripped; change those in the Desk |
-| Upload a local file to the POS | `upload_attachment` | Can attach to a record (`doctype` + `name`) or fill an Attach field. Private by default; images used on the storefront need `is_private=false`. Local stdio server only |
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| Read an integration's configuration | `get_settings` | no | `ffl`, `fastbound`, `rsr`, `payroc`, `woocommerce`, `shipstation`, `gunbroker`, `sports_south`, `lipseys` or `data_service` |
+| Change configuration (non-secret fields) | `update_settings` | no | Password and key fields are stripped; change those in the Desk. `FFL Settings.store_customer_id_numbers` (switching it off erases stored IDs) and `Payroc Settings.enabled` (use `payments.hub.toggle`) are refused on every write path |
+| Why the card terminal will not charge | `card_processor_test_connection` | no | Read-only. Each processor's switch vs readiness, a live probe, and optionally the terminals the active processor may use |
+| Installed POS extensions, their updates, what turning one off interrupts | `extensions_status(extension?)` | no | Read-only. System Manager |
+| Refresh, enable, disable, install or update an extension | `manage_extension` | `enable`, `disable`, `install`, `update` | System Manager. `refresh` and `update_preview` change nothing installed. An update is two steps: `update_preview` shows the new and high-risk permissions, and `update` runs only when `accept_permissions` echoes them. Uninstall is `frappe_run_method('ffl_core.api.extensions.uninstall_from_site', {extension, confirm_id: extension}, confirm=true)` |
+| Upload a local file to the POS | `upload_attachment` | no | Can attach to a record (`doctype` + `name`) or fill an Attach field. Private by default; images used on the storefront need `is_private=false`. Local stdio server only |
 
 ## 9. The generic `frappe_*` tools
 
@@ -296,7 +374,8 @@ usable the day they ship, without an MCP update.
 - `frappe_list_documents`, `frappe_get_document`, `frappe_describe_doctype`: read any doctype (describe first to see field names).
 - `frappe_create_document`, `frappe_update_document`: create or change any record (credential fields stripped).
 - `frappe_delete_document`, `frappe_submit_document`, `frappe_cancel_document`: delete, submit, cancel (all need `confirm`).
-- `frappe_run_method`: call any whitelisted method by dotted path. A method name containing a high-consequence verb (delete, cancel, refund, dispose, push, charge, consolidate, ship, return, receive, sold, settle, onboard and similar) needs `confirm`. A short explicit list of methods without such a verb but with high consequences (`_ALWAYS_CONFIRM_METHODS`: order updates, consignment price and invoice methods, record_payment, resolving a card void/refund, stock add/set, tax-exempt changes, every stocktake, cash drawer and storage write, trade-in intake, cost correction) needs `confirm` as well. The test for inclusion is: it books money, moves stock, or changes compliance or tax state.
+- `list_pos_actions` (read-only): search every POS endpoint the signed-in user can run (core apps and installed extensions): arguments, HTTP verb, roles, whether `frappe_run_method` will ask for `confirm`, and `use_tool` when a dedicated tool does the job. Needs a POS release with `ffl_core.api.action_catalog.list_actions`; registered wherever `frappe_run_method` is (never cpa).
+- `frappe_run_method`: call any whitelisted method by dotted path. Sent as GET when the action catalog lists the method as GET-only (cached 10 minutes per method), otherwise POST, including on a POS without the catalog. A method name containing a high-consequence verb (delete, cancel, refund, dispose, push, charge, consolidate, ship, return, receive, sold, settle, onboard and similar) needs `confirm`. An explicit list of methods without such a verb but with consequences (`_ALWAYS_CONFIRM_METHODS`: every write a dedicated tool wraps, plus order, consignment, payment, stock, tax, stocktake, cash drawer, storage, gunsmith, membership, 4473, bound-book, GunBroker, Woo and extension writes) needs `confirm` as well. The test for inclusion is: it books money, moves stock, or changes compliance, tax or a live listing. Refused outright: credential, signing-chain, terminal-pairing, staff-PIN, price-approval PIN, sideload, webhook and audit endpoints; the legacy `ffl_integrations.payroc.api.*` aliases (call `payments.api`); `receive_from_do` (use `distributor_receive`), `backfill_condition_attributes` (use `woo_store_maintenance`), `request_agreement` without `deliver` email/tablet/none (use `agreement_request`) and `sync_in_stock_from_boundbook` applied without `item_ids` (use `boundbook_reconcile`).
 - `frappe_run_report`: run any report.
 
 Handy dotted paths for operations without a dedicated tool (all via `frappe_run_method`):
@@ -304,22 +383,16 @@ Handy dotted paths for operations without a dedicated tool (all via `frappe_run_
 | Scenario | Dotted path |
 |---|---|
 | Manually consolidate a stuck POS invoice (when a gun does not leave stock) | `ffl_core.api.pos_consolidate.consolidate_pos_invoice_now` (confirm) |
-| Verify a **customer's** FFL | `ffl_integrations.atf.ez_check_api.verify_customer_ffl` |
-| Field-level reconcile of one gun against FastBound | `ffl_integrations.fastbound.reconcile.compute_serial_fb_diff` (read-only), plus the rest of the reconcile suite |
-| Individual trade-in intake (`payout_method` is Cash, Zelle, Check or ACH when no credit is applied; `apply_credit` uses store credit instead) | `ffl_core.api.trade_in.create_trade_in_intake` (confirm) |
-| Correct the cost of a gun already in the book (`payout_was_different=1` books the difference as a payment entry) | `ffl_core.api.cost_correction.correct_serial_cost` (look serials up with `list_item_serials_for_cost`; confirm) |
-| Safely delete an Item, keeping the firearm audit chain | `ffl_core.api.item_admin.preview_delete`, then `force_delete` (confirm) |
-| Edit a pending counter order (cancel-and-rebuild, only before disposition or shipment push) | `ffl_core.api.manual_order.update_order` (confirm; it is a cancel-and-rebuild cascade, so state what will change first) |
-| Read or set a customer's tax-exempt status | `ffl_core.api.manual_order.get_customer_tax_status`, `set_customer_tax_exempt` |
-| Reconcile a partial Woo refund into the POS | `ffl_woo_sync.woocommerce.refunds.reconcile_web_order_refund` (confirm) |
-| Clean up IDs pointing at deleted Woo products | `ffl_woo_sync.woocommerce.dangling.woo_audit_dangling_ids` (`fix=0` is a dry run) |
+| Delete an Item | `ffl_core.api.item_admin.preview_delete`, then `force_delete` (confirm). It does **not** keep the A&D trail: it deletes non-submitted acquisitions and dispositions and raw-deletes ledger rows |
+| Read or set a customer's tax-exempt status | `ffl_core.api.manual_order.get_customer_tax_status`, `set_customer_tax_exempt` (confirm) |
 | Onboard a consignment dealer (FFL lookup, then Customer plus portal account) | `osa_consignment.api.dealer_onboarding.lookup_ffl`, then `onboard_dealer` (confirm) |
-| Retry a failed web-order revenue invoice | `ffl_woo_sync.woocommerce.revenue.create_web_invoice_now` |
+| Turn a card processor on or off | `ffl_integrations.payments.hub.toggle` (confirm; refuses a second active processor) |
+| Place a counter order's Draft distributor legs (a real purchase) | `ffl_core.api.manual_order.release_order_legs` (confirm) |
 | Undo a consignment settlement | cancel the settlement Sales Invoice with `frappe_cancel_document` |
 
-## 9b. Distributor direct-ship (RSR Direct Connect, Sports South): `distributor_*`, 13 tools (9 always registered + 4 queue actions)
+## 9b. Distributor direct-ship (RSR Direct Connect, Sports South): `distributor_*`, 16 tools (12 always registered + 4 queue actions)
 
-Eight read-only tools, one confirm-gated draft-order tool and four confirm-gated queue actions. It deliberately excludes
+Nine read-only tools, three confirm-gated always-registered writes (draft order, receive, ensure item) and four confirm-gated queue actions. It deliberately excludes
 placing an order directly, writes to Settings, and any mutation surface beyond what is
 listed here. The four queue actions are registered only when
 `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1` is set, and never on the remote connector. "Always registered" means in `full` mode; cpa mode registers none of the writes.
@@ -335,6 +408,9 @@ listed here. The four queue actions are registered only when
 | `distributor_precheck_fds` | `distributor.router.precheck_fds` | Asks the distributor whether it will ship to that transfer dealer (HTTP call; read-only) |
 | `distributor_fulfillment_options` | `distributor.options.fulfillment_options_for_order` | Decision panel for one web order: candidate distributors per line (cheapest first), a local-stock comparison row and a verdict. Read-only. **Read the three-state note below before using the result** |
 | `distributor_create_draft_order` | `distributor.api.create_orders` | Needs `confirm`. Draft restock order(s) from one distributor, shipped to the store; lines are `{sku, qty, item_code?, upc?}`. A line with no Item gets the shop's existing Item, else one made from the catalog. May split into several drafts; places nothing. Not idempotent: after a failed call, check `distributor_orders` for Drafts before retrying. Registered on the remote connector too |
+| `distributor_incoming` | `distributor.receive_bridge.list_incoming` / `match_incoming` | Parcels on their way and what is outstanding on each, grouped by the order they are for; with `item_code`, which waiting lines a unit that just arrived could belong to. Read-only. Stock Manager |
+| `distributor_receive` | `distributor.receive_bridge.receive_lines` / `receive_invoice_lines` / `stage_invoice` | Receive a parcel against its Distributor Order or store invoice. Without `items` it prepares (no confirm; staging an invoice can create local Items); with `items` it books stock and the acquisitions and hands the gun to the waiting order (confirm) |
+| `distributor_ensure_item` | `distributor.api.ensure_dropship_item` | Needs `confirm`. Find or create the store Item for a distributor SKU; `dropship=true` also marks it drop-shipped by that house, which changes web routing |
 | `distributor_confirm_order` | `distributor.api.confirm_order` | Needs `confirm`. Draft to Queued and starts the ordering worker, which is **a real, irreversible purchase**; RSR has no cancel API. Counter-origin orders also require the invoice to be paid in full |
 | `distributor_cancel_order` | `distributor.api.cancel_order` | Needs `confirm` and a `reason`. Safe only before ordering (Draft or Queued); an order already placed is flagged and operations are alerted, because returns are a manual process |
 | `distributor_reroute` | `distributor.router.reroute` | Needs `confirm`. Re-runs routing after the blocking reason is fixed; only creates Drafts, idempotent |
@@ -368,22 +444,25 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-127 tools, of which 114 register by default (the 4 distributor queue actions, the 3
+174 tools, of which 160 register by default (the 4 distributor queue actions, the 4
 GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
 refusing". There are three layers of defence, and each still holds if another fails:
 
-1. **Registration layer.** `tools/list` is exactly the 27 names below (set equality, pinned by tests).
+1. **Registration layer.** `tools/list` is exactly the 29 names below (set equality, pinned by tests).
 2. **Client layer.** Every write method and every dotted-path method not individually listed is refused with `CpaModeRefused` (`frappe_run_method` is not registered at all). The read-only dotted-path allowlist names each method; wildcards are not allowed.
 3. **Settings layer.** `get`/`list` reads of the seven integration Settings doctypes are blocked too (configuration is useless to an accountant; password masking is framework behaviour, not something this repo guarantees).
 
-**The 27 cpa-mode tools:**
+**The 29 cpa-mode tools:**
 - Generic reads (4): `frappe_list_documents`, `frappe_get_document`, `frappe_describe_doctype`, `frappe_run_report`.
-- Business reads (10): `find_item`, `item_stock`, `firearms_in_stock`, `pending_orders`, `pending_web_orders`, `consignment_queue`, `consignment_dealers`, `consignment_serials`, `consignment_dealer_orders`, `boundbook_mismatches` (the dry-run-only bound-book reconcile; `boundbook_reconcile` can apply, so it stays full-mode only).
+- Business reads (12): `find_item`, `item_stock`, `firearms_in_stock`, `pending_orders`, `pending_web_orders`, `web_order_exceptions`, `gb_pending_orders`, `consignment_queue`, `consignment_dealers`, `consignment_serials`, `consignment_dealer_orders`, `boundbook_mismatches` (the dry-run-only bound-book reconcile; `boundbook_reconcile` can apply, so it stays full-mode only).
 - Stocktake and cash drawer reads (6, see section 3b; also available in `full`): `cash_drawer_closes`, `cash_drawer_entries`, `cash_drawer_log`, `cash_drawer_weekly`, `inventory_counts`, `inventory_count_variance`. None of the writes is included. The two stocktake reads need a Stock role on the API user; the four drawer reads need only Accounts User.
 - `boundbook_mismatches` reads the whole FastBound book (one slow call, 130 s timeout). The POS allows it for System Manager, Sales User/Manager, Stock User/Manager and Accounts User.
 - Report kit (7, below; also available in `full`).
+
+`memberships` and `refresh_4473_status` look like reads but write as a side effect, so they
+are listed in `modes.NOT_PURE_READS` and may never join the cpa surface.
 
 `available_serials` is **not** in cpa mode. It hides consigned-out and held guns by default,
 which would hide guns during a count; use `firearms_in_stock` for that.
@@ -395,8 +474,8 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 113 tools remotely (`upload_attachment` reads a path on the server and is never
-registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The three GunBroker
+surface is 159 tools remotely (`upload_attachment` reads a path on the server and is never
+registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The four GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
 
@@ -436,13 +515,17 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 | Cannot do | Alternative |
 |---|---|
 | Change password or API-key fields | Change them in the Desk (by design, to prevent leaks) |
-| Upload gun photos in bulk and build galleries | Use a script that resizes images first and creates the gallery (for example the `firearm-listing-import` skill's script) |
+| Upload gun photos in bulk | Use a script that resizes images first (for example the `firearm-listing-import` skill's script); arrange the gallery with `edit_photo_gallery` |
 | Change doctype structure, permissions or roles | Do it in code and migrations; the MCP write denylist blocks it |
-| Take a card payment or refund through Payroc | Use the POS checkout screen (real money; deliberately not wrapped as a tool) |
+| Approve a price below list with another manager's PIN or password | A manager-connected agent approves its own price; anyone else asks a manager at the counter (credentials never pass through the MCP) |
+| Collect a customer's signature, pair a signing tablet, switch staff with a PIN | Done by a person on the device (`agreement_request` sends the request) |
+| View a signed 4473 PDF | Read the Form 4473 Log metadata and give a person the Desk link (each view is logged as a human view) |
+| Install an extension from an uploaded package or a git URL | Only the publisher-checked update path (`manage_extension(action='update')`) is offered |
+| Take a trade-in as store credit inside a cart | Not offered yet; `trade_in_intake` pays the seller now |
 | Fill in the 4473 form itself in FastBound | Use the FastBound web UI (the form can only be completed there) |
 | Mark received or sold on behalf of a consignment dealer (`mark_received`, `mark_sold`) | These methods are bound to the portal dealer's session identity and refuse admin-key calls; the dealer does it in the portal |
 | Trigger the ShipStation tracking poll manually | It runs on a schedule (`poll_consignment_tracking` is not a whitelisted method); check the ShipStation dashboard for an urgent lookup |
 
 ---
 
-*Total tools: 127 (10 generic + 61 dedicated + 13 distributor + 7 report tools + 6 Range tools + 30 shop-floor). 114 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 3 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 27 of them. Matches version v0.11.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 174 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 15 compliance and store-admin tools + 30 shop-floor). 160 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 29 of them. Matches version v0.12.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

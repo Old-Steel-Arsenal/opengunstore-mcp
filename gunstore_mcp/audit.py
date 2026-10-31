@@ -36,14 +36,18 @@ def _submit(fn, *args) -> None:
 
 
 _ASSIGNED_SECRET = re.compile(r"(" + _CREDENTIAL_NAME.pattern + r")(\W{0,3}[=:]\W{0,3})\S+", re.I)
+# Personal data a tool legitimately writes (hr_onboard) but the audit trail must not keep.
+# Kept apart from _CREDENTIAL_NAME: that rule also strips fields from writes.
+_PERSONAL_NAME = re.compile(r"date_of_birth", re.I)
 
 
 def _mask(value: Any) -> Any:
     """Secrets masked before anything leaves this process (the POS masks again):
-    by key (the write guards' credential rule), in [field, op, value] filter
-    triples, and inside JSON-string arguments."""
+    by key (the write guards' credential rule, plus personal fields), in
+    [field, op, value] filter triples, and inside JSON-string arguments."""
     if isinstance(value, dict):
-        return {k: ("***" if _CREDENTIAL_NAME.search(str(k)) else _mask(v)) for k, v in value.items()}
+        return {k: ("***" if _CREDENTIAL_NAME.search(str(k)) or _PERSONAL_NAME.search(str(k))
+                    else _mask(v)) for k, v in value.items()}
     if isinstance(value, list):
         if len(value) >= 3 and isinstance(value[0], str) and _CREDENTIAL_NAME.search(value[0]):
             return [value[0], value[1], "***", *value[3:]]

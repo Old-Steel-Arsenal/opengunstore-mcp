@@ -74,10 +74,10 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-174 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 6 Range; 160 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+181 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 6 Range; 167 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
-exactly 29 tools (the write surface is never registered), a per-name read-only
+exactly 30 tools (the write surface is never registered), a per-name read-only
 method allowlist at the client layer, and the 7 integration Settings doctypes
 blocked from reads. Default (`full`) is the whole surface. Register a second
 server entry (e.g. `gunstore-pos-cpa`) with the same command plus
@@ -102,7 +102,7 @@ claude mcp add gunstore-pos-cpa --scope user \
   so env vars set in the registration win. A standalone install needs no
   `.env` file at all — and the same checkout can serve several entries with
   different `FRAPPE_BASE_URL` / mode combinations (e.g. a dev-site instance).
-- **Verify**: after connecting, `tools/list` must show exactly **29** tools and
+- **Verify**: after connecting, `tools/list` must show exactly **30** tools and
   the server name `gunstore-pos-cpa`. A misspelled/unknown mode value refuses
   to start (fail-closed) rather than silently degrading to the writable surface.
 - **Security boundary — read before handing this to a third party**: the
@@ -224,6 +224,17 @@ Every write needs `confirm=true`; there is no registration gate (they are the sa
 | `distributor_create_draft_order` | Draft restock order(s) shipped to the store (`confirm`) |
 | `distributor_confirm_order` / `distributor_cancel_order` / `distributor_reroute` / `distributor_update_order_ffl` | the 4 queue actions: place / cancel / re-route / fix an FDS hold (opt-in via `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, then `confirm`; never on the remote connector) |
 
+### Frappe HR (`tools/hr.py`; needs the `hrms` app on the site)
+Attendance, shifts and leave only; payroll is out of scope. Every write needs `confirm=true`, and there is no registration gate. On a site without hrms every tool answers "Frappe HR (hrms) is not installed on this site".
+
+| Tool | Purpose |
+|---|---|
+| `hr_staff` / `hr_attendance` / `hr_leave` | active staff with shift, holiday list, approver, whether a User Permission limits their login, and today's last clock-in / check-ins and Attendance per day with totals (range capped at 62 days) / leave balances or the Open Leave Applications (read-only; nothing personal is returned) |
+| `hr_hours_summary` | days Present / Half Day / Absent / On Leave and working hours per employee for a period, with the count of days that have check-ins but no Attendance yet (read-only; also on the cpa surface) |
+| `hr_leave_decide` | approve or reject an Open Leave Application, a reject needs a reason (`confirm`) |
+| `hr_attendance_fix` | `action` = add_checkin \| mark_attendance: add a missed punch / mark and submit a day's Attendance, with a recorded reason (`confirm`) |
+| `hr_onboard` | make an existing login an employee in one step: Employee, User Permission rule, shift, holiday list and the Leave Policy Assignment for the current anniversary year (`confirm`) |
+
 ### Range board (`tools/range_board.py`, opt-in via `GUNSTORE_MCP_RANGE=1`)
 | Tool | Purpose |
 |---|---|
@@ -272,7 +283,7 @@ and approves. No key is typed anywhere, and the server holds none.
   `ffl_core/api/connector.py` and the Connector Audit Log doctype.
 - A user with **Restrict IP** set cannot use the connector: calls reach the POS from
   the connector (and ultimately from Claude's servers), never from the user's IP.
-- `cpa` mode keeps all three read-only layers. The full surface is **159 tools**
+- `cpa` mode keeps all three read-only layers. The full surface is **166 tools**
   remotely: `upload_attachment` reads a path on the *server* and is never registered
   there. The distributor queue actions never open remotely (the server refuses to start;
   `distributor_create_draft_order` is not one of them and is there);

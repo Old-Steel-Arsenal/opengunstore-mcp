@@ -298,6 +298,20 @@ POS answers those steps with its own "method not found" error.
 | Memberships: plans and totals, the roster, one customer's | `memberships(view=overview\|members\|customer)` | no | `view=customer` can settle a sign-up that was paid another way, so this tool is never on a read-only surface |
 | Sell and manage memberships | `membership_action` | yes | `start`, `invoice`, `invoice_renewal`, `retry_card`, `set_auto_renew`, `change_card`, `cancel`, `drop` (discard a Pending sign-up). Take the invoice's payment with `record_payment` or `card_terminal_charge` |
 
+## 4e. Staff, attendance and leave (`tools/hr.py`)
+
+Needs the Frappe HR (`hrms`) app on the site; without it every tool answers "Frappe HR (hrms) is not installed on this site". The scope is attendance, shifts and leave. Payroll is not covered. The reads never write; every write needs `confirm=true`.
+
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| Who works here, and who has clocked in | `hr_staff` | no | Active employees: shift, holiday list, leave approver, `restricted_to_employees` (the Employee ids a User Permission limits that login to; `[]` = sees everyone; `null` when the caller is not a System Manager and cannot read User Permission) and today's last check-in. Birth date, address, bank and other personal fields are never returned |
+| Check-ins and Attendance by day | `hr_attendance(from_date, to_date, employee?)` | no | Range capped at 62 days. Per employee: the days with check-ins and Attendance, plus totals. Draft Attendance is shown but not counted |
+| Leave balances, or what is waiting for a decision | `hr_leave(view=balances\|pending, employee?)` | no | `balances` is hrms's own `get_leave_details` per employee, valid today. `pending` lists Open Leave Applications (the employee's reason text is not returned) |
+| Hours per employee for a period | `hr_hours_summary(from_date, to_date)` | no | Also in cpa mode. Totals count submitted Attendance only; `checkin_days_without_attendance` > 0 means the hours are low until auto-attendance has run for those days (today is not counted: hrms marks it after the shift) |
+| Approve or reject a leave request | `hr_leave_decide(leave_application, decision=approve\|reject, reason?)` | yes | Only an Open application. A reject needs a reason. Sets the status and submits; if the submit fails the status goes back to Open. The reason is stored as a Comment (hrms has no field for it) |
+| Fix a missed punch, or mark a day | `hr_attendance_fix(action=add_checkin\|mark_attendance, employee, reason, ...)` | yes | `add_checkin` needs `time` + `log_type`; `mark_attendance` needs `attendance_date` + `status` (Present, Absent, Half Day, Work From Home), optional `working_hours`. Refused if that day already has an Attendance (the message says how to correct it in Desk). Leave is not marked here: approve the Leave Application. Stray arguments are refused; the reason is stored as a Comment |
+| Make an existing login an employee | `hr_onboard` | yes | Creates the Employee, a Leave Policy Assignment for the joining-anniversary year that contains today, and picks shift / holiday list / policy when there is only one. Staff get a User Permission limiting them to their own Employee; System Manager, HR Manager and HR User logins do not. Needs a System Manager caller (it reads the target User). `date_of_birth` is masked in the connector audit log. Never edits the user's Role Profile: if it lacks the roles `Employee` / `Employee Self Service` the result warns, because a profile sync would strip them |
+
 ## 5. Consignment out (the whole At Dealer lifecycle)
 
 Consignments have their own queue and flow and do **not** use the Pending Order queue of
@@ -444,22 +458,23 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-174 tools, of which 160 register by default (the 4 distributor queue actions, the 4
+181 tools, of which 167 register by default (the 4 distributor queue actions, the 4
 GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
 refusing". There are three layers of defence, and each still holds if another fails:
 
-1. **Registration layer.** `tools/list` is exactly the 29 names below (set equality, pinned by tests).
+1. **Registration layer.** `tools/list` is exactly the 30 names below (set equality, pinned by tests).
 2. **Client layer.** Every write method and every dotted-path method not individually listed is refused with `CpaModeRefused` (`frappe_run_method` is not registered at all). The read-only dotted-path allowlist names each method; wildcards are not allowed.
 3. **Settings layer.** `get`/`list` reads of the seven integration Settings doctypes are blocked too (configuration is useless to an accountant; password masking is framework behaviour, not something this repo guarantees).
 
-**The 29 cpa-mode tools:**
+**The 30 cpa-mode tools:**
 - Generic reads (4): `frappe_list_documents`, `frappe_get_document`, `frappe_describe_doctype`, `frappe_run_report`.
 - Business reads (12): `find_item`, `item_stock`, `firearms_in_stock`, `pending_orders`, `pending_web_orders`, `web_order_exceptions`, `gb_pending_orders`, `consignment_queue`, `consignment_dealers`, `consignment_serials`, `consignment_dealer_orders`, `boundbook_mismatches` (the dry-run-only bound-book reconcile; `boundbook_reconcile` can apply, so it stays full-mode only).
 - Stocktake and cash drawer reads (6, see section 3b; also available in `full`): `cash_drawer_closes`, `cash_drawer_entries`, `cash_drawer_log`, `cash_drawer_weekly`, `inventory_counts`, `inventory_count_variance`. None of the writes is included. The two stocktake reads need a Stock role on the API user; the four drawer reads need only Accounts User.
 - `boundbook_mismatches` reads the whole FastBound book (one slow call, 130 s timeout). The POS allows it for System Manager, Sales User/Manager, Stock User/Manager and Accounts User.
 - Report kit (7, below; also available in `full`).
+- `hr_hours_summary` (section 4e): hours per employee, names only. It uses plain REST reads of Employee, Employee Check-in and Attendance, so the method allowlist gains nothing; the API user needs read access to those three. The other `hr_*` reads and all the writes stay full-mode only.
 
 `memberships` and `refresh_4473_status` look like reads but write as a side effect, so they
 are listed in `modes.NOT_PURE_READS` and may never join the cpa surface.
@@ -474,7 +489,7 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 159 tools remotely (`upload_attachment` reads a path on the server and is never
+surface is 166 tools remotely (`upload_attachment` reads a path on the server and is never
 registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The four GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
@@ -528,4 +543,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 174 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 15 compliance and store-admin tools + 30 shop-floor). 160 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 29 of them. Matches version v0.12.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 181 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 167 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.13.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

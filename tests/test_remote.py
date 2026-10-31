@@ -364,6 +364,13 @@ class AuditMask(unittest.TestCase):
 		self.assertEqual(masked, {"doctype": "GunBroker Settings", "dev_key": "***",
 			"values": {"consumer_key": "***", "password": "***", "qty": 3}, "rows": [{"api_key": "***"}]})
 
+	def test_hr_onboard_birth_date_is_masked(self):
+		from gunstore_mcp import audit
+		masked = audit._mask({"user": "sam@x.com", "date_of_birth": "1990-01-01",
+			"date_of_joining": "2026-10-01"})
+		self.assertEqual(masked, {"user": "sam@x.com", "date_of_birth": "***",
+			"date_of_joining": "2026-10-01"})
+
 
 class AuditValueMask(unittest.TestCase):
 	def test_secrets_in_filters_json_strings_and_error_text(self):

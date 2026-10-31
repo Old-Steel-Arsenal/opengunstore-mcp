@@ -35,7 +35,7 @@ class CpaModeRefused(RuntimeError):
 
 
 # Layer 1 — the EXACT cpa tools/list (asserted by set equality in tests;
-# 4 generic + 12 curated read-only + 6 shop-floor reads + 7 CPA reports = 29).
+# 4 generic + 12 curated read-only + 6 shop-floor reads + 7 CPA reports + 1 HR hours = 30).
 CPA_TOOL_NAMES: frozenset[str] = frozenset({
     # generic reads (frappe_run_method deliberately absent: reads and writes
     # are statically indistinguishable through it)
@@ -76,6 +76,10 @@ CPA_TOOL_NAMES: frozenset[str] = frozenset({
     "tax_liability",
     "ar_ap_summary",
     "payroc_transactions",
+    # Hours per employee (tools/hr.py): names, days and hours only, plain REST reads, so
+    # layer 2 needs no new method. The other hr_* reads show check-in times and approvers,
+    # and the hr_* writes are full-mode only.
+    "hr_hours_summary",
 })
 
 # Layer 2 — dotted methods callable in cpa mode. One name per line, verified

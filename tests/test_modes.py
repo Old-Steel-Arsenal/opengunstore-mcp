@@ -1,6 +1,6 @@
 """CPA mode tests: the three defence layers.
 
-Layer 1 — registration: GUNSTORE_MCP_MODE=cpa registers EXACTLY the 29-name
+Layer 1 — registration: GUNSTORE_MCP_MODE=cpa registers EXACTLY the 30-name
 allowlist (set equality, per spec acceptance #1 — not merely "no write tools").
 Layer 2 — client: mutating client methods + non-allowlisted dotted methods
 raise CpaModeRefused before any HTTP.
@@ -80,6 +80,8 @@ EXPECTED_CPA_TOOLS = {
 	# CPA reports (7)
 	"sales_report", "inventory_receipts", "gl_entries", "financial_statement",
 	"tax_liability", "ar_ap_summary", "payroc_transactions",
+	# HR hours (1) — the other hr_* reads and every hr_* write stay full-mode only
+	"hr_hours_summary",
 }
 
 EXPECTED_METHOD_ALLOWLIST = {
@@ -130,21 +132,21 @@ class FakeMCP:
 
 
 class RegistrationLayer(unittest.TestCase):
-	def test_cpa_mode_registers_exactly_the_29_allowlisted_tools(self):
+	def test_cpa_mode_registers_exactly_the_30_allowlisted_tools(self):
 		mcp = FakeMCP()
 		server.register_tools(mcp, mode="cpa")
 		self.assertEqual(set(mcp.tools), EXPECTED_CPA_TOOLS)
-		self.assertEqual(len(mcp.tools), 29)
+		self.assertEqual(len(mcp.tools), 30)
 
 	def test_default_full_mode_holds_both_opt_in_sets_back(self):
-		"""Default full mode is 160, not 168: the 4 distributor queue actions and the
+		"""Default full mode is 167, not 175: the 4 distributor queue actions and the
 		4 GunBroker write actions each require an explicit opt-in. Pinned separately
 		from the full surface so that turning either gate into a no-op would break a
 		test rather than quietly restore the wider surface."""
 		mcp = FakeMCP()
 		with _actions(None):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 160)
+		self.assertEqual(len(mcp.tools), 167)
 		for name in ("distributor_confirm_order", "distributor_cancel_order",
 				"distributor_reroute", "distributor_update_order_ffl",
 				"gb_push_serial", "gb_end_listing", "gb_pull_orders", "gb_update_listing"):
@@ -175,7 +177,7 @@ class RegistrationLayer(unittest.TestCase):
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="cpa")
 		self.assertEqual(set(mcp.tools), EXPECTED_CPA_TOOLS)
-		self.assertEqual(len(mcp.tools), 29)
+		self.assertEqual(len(mcp.tools), 30)
 		for name in ("gb_push_serial", "gb_end_listing", "gb_pull_orders",
 				"gb_test_connection", "gb_listing_status"):
 			self.assertNotIn(name, mcp.tools)
@@ -184,7 +186,7 @@ class RegistrationLayer(unittest.TestCase):
 		mcp = FakeMCP()
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 168)
+		self.assertEqual(len(mcp.tools), 175)
 		self.assertTrue(EXPECTED_CPA_TOOLS <= set(mcp.tools))
 		# regression: none of the write faces leaked out of full mode
 		for name in ("frappe_run_method", "dispose_order", "receive_goods",

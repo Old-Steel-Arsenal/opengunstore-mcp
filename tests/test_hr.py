@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 import unittest
-from datetime import date
+from datetime import date, datetime
 from unittest.mock import patch
 
 from gunstore_mcp import config as config_mod
@@ -20,6 +20,8 @@ from gunstore_mcp.safety import WriteRefused
 from gunstore_mcp.tools import hr
 
 TODAY = date(2026, 10, 31)
+# The store clock every test runs at, so the fixtures dated around TODAY never go stale.
+NOW = datetime(2026, 10, 31, 12, 0)
 HRMS_DOCTYPES = {"Employee Checkin", "Attendance", "Leave Application", "Leave Policy",
                  "Leave Policy Assignment", "Shift Type"}
 WRITES = ("hr_leave_decide", "hr_attendance_fix", "hr_onboard")
@@ -177,6 +179,9 @@ class Base(unittest.TestCase):
         p = patch.object(hr, "get_client", return_value=self.client)
         p.start()
         self.addCleanup(p.stop)
+        clock = patch.object(hr, "_site_now", return_value=NOW)
+        clock.start()
+        self.addCleanup(clock.stop)
 
     def tool(self, name):
         return self.tools[name]
@@ -281,6 +286,20 @@ class Staff(Base):
                                     "last_checkin_today"})
 
 
+class StaffWithoutUserPermissionRead(Base):
+    def test_a_403_on_user_permission_leaves_the_restriction_unknown(self):
+        real = self.client.list_documents
+
+        def guarded(doctype, **kw):
+            if doctype == "User Permission":
+                raise FrappeAPIError(403, "PermissionError", ["not permitted"])
+            return real(doctype, **kw)
+        self.client.list_documents = guarded
+        out = self.tool("hr_staff")()
+        self.assertEqual([e["name"] for e in out], ["E1", "E2"])
+        self.assertTrue(all(e["restricted_to_employees"] is None for e in out))
+
+
 class Attendance(Base):
     def seed(self):
         self.client.rows["Employee Checkin"] = [
@@ -338,10 +357,21 @@ class Attendance(Base):
     def test_one_employee_is_filtered_in_the_query(self):
         self.seed()
         self.tool("hr_attendance")("2026-10-01", "2026-10-31", employee="E1")
-        for kind, doctype, _f, filters in self.client.calls:
+        for kind, doctype, *rest in self.client.calls:
+            filters = rest[1] if kind == "list" else None
             if kind == "list" and doctype in ("Employee Checkin", "Attendance"):
                 if filters:
                     self.assertIn(["employee", "=", "E1"], filters)
+
+    def test_todays_checkins_are_not_counted_as_unprocessed(self):
+        self.client.rows["Employee Checkin"] = [
+            {"employee": "E1", "employee_name": "Ann Ames", "time": "2026-10-31 10:30:00",
+             "log_type": "IN"}]
+        out = self.tool("hr_hours_summary")("2026-10-01", "2026-10-31")
+        by = {e["employee"]: e for e in out["employees"]}
+        self.assertEqual(by["E1"]["checkin_days"], 1)
+        self.assertEqual(by["E1"]["checkin_days_without_attendance"], 0)
+        self.assertEqual(out["employees_with_unprocessed_days"], 0)
 
     def test_hours_summary(self):
         self.seed()
@@ -522,6 +552,24 @@ class AttendanceFix(Base):
                 self.fix(action="add_checkin", time=bad, log_type="IN")
         self.assertEqual(self.client.calls, [])
 
+    def test_a_later_time_today_is_refused(self):
+        with self.assertRaises(ValueError):  # NOW is 12:00 on TODAY
+            self.fix(action="add_checkin", time="2026-10-31 18:30", log_type="OUT")
+        self.assertEqual(self.client.writes(), [])
+        self.fix(action="add_checkin", time="2026-10-31 10:30", log_type="IN")
+
+    def test_a_failed_comment_keeps_the_checkin_and_warns(self):
+        real = self.client.create_document
+
+        def no_comment(doctype, values):
+            if doctype == "Comment":
+                raise FrappeAPIError(403, "PermissionError", ["no Comment create"])
+            return real(doctype, values)
+        self.client.create_document = no_comment
+        out = self.fix(action="add_checkin", time="2026-10-30 08:00", log_type="IN")
+        self.assertTrue(out["employee_checkin"])
+        self.assertIn("reason could not be recorded", out["warning"])
+
     def test_future_times_and_dates_are_refused(self):
         with self.assertRaises(ValueError):
             self.fix(action="add_checkin", time="2026-11-01 08:00", log_type="IN")
@@ -642,13 +690,26 @@ class Onboard(Base):
     def employee_values(self):
         return [c for c in self.client.writes() if c[1] == "Employee"][0][2]
 
+    def test_a_login_the_caller_cannot_read_is_refused_before_any_write(self):
+        real = self.client.get_document
+
+        def guarded(doctype, name):
+            if doctype == "User":
+                raise FrappeAPIError(403, "PermissionError", ["not permitted"])
+            return real(doctype, name)
+        self.client.get_document = guarded
+        with self.assertRaises(WriteRefused) as cm:
+            self.onboard()
+        self.assertIn("System Manager", str(cm.exception))
+        self.assertEqual(self.client.writes(), [])
+
     def test_staff_user_gets_a_user_permission(self):
         out = self.onboard()
         self.assertEqual(self.employee_values()["create_user_permission"], 1)
         self.assertEqual(out["create_user_permission"], 1)
 
     def test_admin_and_approver_roles_get_none(self):
-        for role in ("System Manager", "HR Manager"):
+        for role in ("System Manager", "HR Manager", "HR User"):
             with self.subTest(role=role):
                 self.client.docs[("User", "sam@x.com")]["roles"] = [
                     {"role": "Sales User"}, {"role": role}]

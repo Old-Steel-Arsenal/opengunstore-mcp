@@ -54,7 +54,7 @@ NOT_INSTALLED = "Frappe HR (hrms) is not installed on this site"
 MAX_DAYS = 62
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Roles that must see every employee, so their Employee never carries a User Permission.
-_ADMIN_ROLES = frozenset({"System Manager", "HR Manager"})
+_ADMIN_ROLES = frozenset({"System Manager", "HR Manager", "HR User"})
 # What a user needs to open /hrms, and what a Role Profile sync would strip if the
 # profile does not list it (User.populate_role_profile_roles runs on every User save).
 _ESS_ROLES = ("Employee", "Employee Self Service")
@@ -142,15 +142,19 @@ def _get(client, doctype: str, name: str) -> dict:
         raise
 
 
-def _site_today(client) -> date:
-    """Today in the store's time zone (System Settings), so an evening in California is
-    not already tomorrow in UTC. lazy: falls back to the MCP host's date when System
-    Settings is unreadable for this user."""
+def _site_now(client) -> datetime:
+    """Now in the store's time zone (System Settings), naive like the POS's own stamps, so
+    an evening in California is not already tomorrow in UTC. lazy: falls back to the MCP
+    host's clock when System Settings is unreadable for this user."""
     try:
         tz = (client.get_document("System Settings", "System Settings") or {}).get("time_zone")
-        return datetime.now(ZoneInfo(tz)).date()
+        return datetime.now(ZoneInfo(tz)).replace(tzinfo=None)
     except (FrappeAPIError, KeyError, TypeError, ValueError):  # ZoneInfoNotFoundError is a KeyError
-        return date.today()
+        return datetime.now()
+
+
+def _site_today(client) -> date:
+    return _site_now(client).date()
 
 
 def _insert(client, doctype: str, values: dict) -> dict:
@@ -235,10 +239,12 @@ def _role_profile_gap(client, user_doc: dict) -> str | None:
             "Add the role(s) to the profile in Desk (this tool never edits a Role Profile).")
 
 
-def _per_employee(employees: list[dict], checkins: list[dict], attendance: list[dict]) -> dict:
+def _per_employee(employees: list[dict], checkins: list[dict], attendance: list[dict],
+                  today: date | None = None) -> dict:
     """Totals per employee. Hours and day counts come from SUBMITTED Attendance rows only;
-    `checkin_days_without_attendance` counts days that have a check-in but no submitted
-    Attendance yet (auto-attendance not processed), so the totals are not silently low."""
+    `checkin_days_without_attendance` counts days before `today` that have a check-in but no
+    submitted Attendance (auto-attendance not processed), so the totals are not silently
+    low. Today itself is left out: hrms marks it only after the shift ends."""
     out: dict[str, dict] = {}
 
     def slot(emp: str, name: str | None = None) -> dict:
@@ -268,7 +274,8 @@ def _per_employee(employees: list[dict], checkins: list[dict], attendance: list[
         days.setdefault(c["employee"], set()).add(str(c["time"])[:10])
     for emp, ds in days.items():
         out[emp]["checkin_days"] = len(ds)
-        out[emp]["checkin_days_without_attendance"] = sum(1 for d in ds if (emp, d) not in covered)
+        out[emp]["checkin_days_without_attendance"] = sum(
+            1 for d in ds if (emp, d) not in covered and (today is None or d < str(today)))
     for s in out.values():
         s["working_hours"] = round(s["working_hours"], 2)
     return out
@@ -301,7 +308,8 @@ def register(mcp: Any) -> None:
         """The active staff in Frappe HR. Read-only. Per employee: name (the Employee id),
         employee_name, user_id (the login), default_shift, holiday_list, leave_approver,
         restricted_to_employees (the Employee ids a User Permission limits this login to:
-        [] means they see everyone, [their own id] means they see only themselves) and
+        [] means they see everyone, [their own id] means they see only themselves; null when
+        the caller cannot read User Permission, which needs System Manager) and
         last_checkin_today {time, log_type} when they have clocked in today (store time zone).
 
         Personal data (birth date, address, bank, passport, health) is never returned.
@@ -313,11 +321,16 @@ def register(mcp: Any) -> None:
                        "leave_approver"],
                       [["status", "=", "Active"]], order_by="employee_name asc")
         users = sorted({e["user_id"] for e in staff if e.get("user_id")})
-        restricted: dict[str, list[str]] = {}
+        restricted: dict[str, list[str]] | None = {}
         if users:
-            for p in _rows(client, "User Permission", ["user", "for_value"],
-                           [["allow", "=", "Employee"], ["user", "in", users]]):
-                restricted.setdefault(p["user"], []).append(p["for_value"])
+            try:
+                for p in _rows(client, "User Permission", ["user", "for_value"],
+                               [["allow", "=", "Employee"], ["user", "in", users]]):
+                    restricted.setdefault(p["user"], []).append(p["for_value"])
+            except FrappeAPIError as e:
+                if e.status != 403:
+                    raise
+                restricted = None  # only System Manager reads User Permission
         last: dict[str, dict] = {}
         if staff:
             today = _site_today(client)
@@ -326,7 +339,8 @@ def register(mcp: Any) -> None:
                             ["employee", "in", [e["name"] for e in staff]]],
                            order_by="time desc"):
                 last.setdefault(c["employee"], {"time": c["time"], "log_type": c.get("log_type")})
-        return [{**e, "restricted_to_employees": restricted.get(e.get("user_id"), []),
+        return [{**e, "restricted_to_employees": (None if restricted is None
+                                                  else restricted.get(e.get("user_id"), [])),
                  "last_checkin_today": last.get(e["name"])} for e in staff]
 
     @mcp.tool()
@@ -347,7 +361,7 @@ def register(mcp: Any) -> None:
         client = get_client()
         _require_hrms(client, _CHECKIN)
         checkins, attendance = _window(client, d0, d1, (employee or "").strip() or None)
-        totals = _per_employee([], checkins, attendance)
+        totals = _per_employee([], checkins, attendance, _site_today(client))
         days: dict[str, dict[str, dict]] = {}
 
         def day(emp: str, stamp) -> dict:
@@ -431,7 +445,7 @@ def register(mcp: Any) -> None:
         _require_hrms(client, _ATT)
         staff = _rows(client, "Employee", ["name", "employee_name"], [["status", "=", "Active"]])
         checkins, attendance = _window(client, d0, d1)
-        totals = _per_employee(staff, checkins, attendance)
+        totals = _per_employee(staff, checkins, attendance, _site_today(client))
         rows = sorted(totals.values(), key=lambda t: t["employee_name"] or t["employee"])
         return {"from_date": str(d0), "to_date": str(d1), "employees": rows,
                 "total_working_hours": round(sum(t["working_hours"] for t in rows), 2),
@@ -536,18 +550,22 @@ def register(mcp: Any) -> None:
         client = get_client()
         _require_hrms(client, _ATT)
         emp = _employee(client, employee.strip())
-        today = _site_today(client)
-        if (when.date() if isinstance(when, datetime) else when) > today:
-            raise ValueError(f"{when} is in the future (today is {today}).")
+        now = _site_now(client)
+        if (when > now) if isinstance(when, datetime) else (when > now.date()):
+            raise ValueError(f"{when} is in the future (it is now {now:%Y-%m-%d %H:%M}).")
 
         if action == "add_checkin":
             doc = _insert(client, _CHECKIN, {
                 "employee": emp["name"], "time": when.strftime("%Y-%m-%d %H:%M:%S"),
                 "log_type": log_type})
-            _comment(client, _CHECKIN, doc["name"], f"Added via MCP: {reason}")
-            return {"employee_checkin": doc["name"], "employee": emp["name"],
-                    "employee_name": emp.get("employee_name"), "time": doc.get("time"),
-                    "log_type": log_type}
+            out = {"employee_checkin": doc["name"], "employee": emp["name"],
+                   "employee_name": emp.get("employee_name"), "time": doc.get("time"),
+                   "log_type": log_type}
+            try:
+                _comment(client, _CHECKIN, doc["name"], f"Added via MCP: {reason}")
+            except (FrappeAPIError, WriteRefused) as e:
+                out["warning"] = f"The check-in is saved but the reason could not be recorded: {e}"
+            return out
 
         clash = _rows(client, _ATT, ["name", "status", "docstatus"],
                       [["employee", "=", emp["name"]], ["attendance_date", "=", str(when)],
@@ -595,7 +613,7 @@ def register(mcp: Any) -> None:
         Company (the employee goes in the single company).
 
         Creates the Employee linked to the user (status Active) with:
-        * create_user_permission = 0 when the user holds System Manager or HR Manager
+        * create_user_permission = 0 when the user holds System Manager, HR Manager or HR User
           (admins and approvers must see every employee), else 1: staff are then limited to
           their own Employee and Company, the usual self-service setup.
         * holiday_list = the one given, else the company default; default_shift = the one
@@ -611,7 +629,7 @@ def register(mcp: Any) -> None:
         a later profile sync would strip the role and the employee could not use /hrms.
         Returns the created names plus `warnings` (a step after the Employee was created
         that failed is listed there as INCOMPLETE; the Employee exists either way).
-        Requires confirm=true."""
+        Needs a System Manager login (it reads the target User). Requires confirm=true."""
         _need("hr_onboard", user=user, first_name=first_name, last_name=last_name,
               gender=gender)
         user = user.strip()
@@ -626,7 +644,13 @@ def register(mcp: Any) -> None:
         if born >= today:
             raise ValueError("date_of_birth is in the future.")
 
-        user_doc = _get(client, "User", user)
+        try:
+            user_doc = _get(client, "User", user)
+        except FrappeAPIError as e:
+            if e.status != 403:
+                raise
+            raise WriteRefused("Refused: reading another user's login needs System Manager; "
+                               "onboard from a System Manager login, or in Desk.") from e
         if not int(user_doc.get("enabled") or 0):
             raise WriteRefused(f"Refused: user {user} is disabled.")
         linked = _rows(client, "Employee", ["name"], [["user_id", "=", user]])

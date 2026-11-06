@@ -30,7 +30,7 @@ from gunstore_mcp import safety, server
 from gunstore_mcp.frappe_client import get_client
 from gunstore_mcp.safety import MCP_NEVER_WRITES, WriteRefused
 from gunstore_mcp.tools import (compliance, curated, customers, distributor, generic, hr, orders,
-                                range_board, reports, services, shopfloor)
+                                range_board, reports, services, shopfloor, crm)
 
 DT = "GunBroker Settings"
 FORBIDDEN = sorted(MCP_NEVER_WRITES[DT])
@@ -110,7 +110,7 @@ def _creds():
 # (generic + curated only, while the server registers four — an unguarded writer
 # dropped into distributor.py went unnoticed by the static check below).
 _SURFACE_MODULES = (generic, curated, distributor, reports, shopfloor, range_board, orders,
-                    customers, services, compliance, hr)
+                    customers, services, crm, compliance, hr)
 
 
 def _surface():

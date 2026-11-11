@@ -149,6 +149,7 @@ def register(mcp: Any) -> None:
         description), the want's owner gets a CRM task; nothing is sent to the customer.
         list (read-only): open and matched wants, newest first, by deal, customer or owner.
         add: a want for a deal's primary contact, with keywords ("Mosin 91/30"), an item, or both.
+        Its owner is the account this server signs in as (owner only filters list).
         close: stop alerting on want *name*. add and close require confirm=true."""
         client = get_client()
         if action == "list":

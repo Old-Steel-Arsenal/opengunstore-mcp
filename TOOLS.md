@@ -296,6 +296,7 @@ POS answers those steps with its own "method not found" error.
 | One deal in full | `crm_deal` | no | The record, notes, open tasks and the customer card. The card needs *Link deals to POS orders* on, and never holds an ID, a date of birth or a 4473 |
 | Convert a lead, change a status or owner | `crm_lead_action` | yes | A lead moved off Other mail becomes an ordinary lead. A deal is normally Won by its invoice |
 | Add a note or a task | `crm_note_task` | yes | Sends nothing to the customer |
+| The want list | `crm_want` | add, close | `action="list"` reads open and matched wants. `add` puts a want on a deal's primary contact (keywords, an item, or both); `close` stops its alerts. A fitting arrival gives the want's owner a task; nothing goes to the customer |
 | Turn a deal into a sale | `crm_open_order` | yes | Saves a Create Order draft for someone to finish in the POS. With no customer yet it returns the matches and saves nothing. Takes no payment |
 
 ## 4d. Gunsmith and memberships (`tools/services.py`)
@@ -468,7 +469,7 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-186 tools, of which 172 register by default (the 4 distributor queue actions, the 4
+187 tools, of which 173 register by default (the 4 distributor queue actions, the 4
 GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
@@ -499,7 +500,7 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 171 tools remotely (`upload_attachment` reads a path on the server and is never
+surface is 172 tools remotely (`upload_attachment` reads a path on the server and is never
 registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The four GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
@@ -553,4 +554,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 186 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 5 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 172 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.13.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 187 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.13.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

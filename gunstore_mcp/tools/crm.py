@@ -1,8 +1,8 @@
 """CRM tools: leads and deals in Frappe CRM on the POS, their notes and tasks, and opening a POS order
-from a deal.
+from a deal, and the want list.
 
-Reads: ``crm_find``, ``crm_deal``. Writes need ``confirm=true``: ``crm_lead_action``, ``crm_note_task``,
-``crm_open_order``. A deal never sells anything: ``crm_open_order`` saves a Create Order draft and
+Reads: ``crm_find``, ``crm_deal``, ``crm_want`` with action="list". Writes need ``confirm=true``:
+``crm_lead_action``, ``crm_note_task``, ``crm_open_order``, ``crm_want`` add and close. A deal never sells anything: ``crm_open_order`` saves a Create Order draft and
 someone finishes the sale on that page, with its usual checks. ``crm_find`` leaves out the store's other
 mail (senders who are not customers) unless asked. ``crm_deal`` and ``crm_open_order``'s customer
 matches need the store's *Link deals to POS orders* switch on.
@@ -14,7 +14,7 @@ from typing import Any, Literal
 from ..frappe_client import get_client
 from ..safety import check_fields_writable, require_confirm
 
-LEAD, DEAL, NOTE, TASK = "CRM Lead", "CRM Deal", "FCRM Note", "CRM Task"
+LEAD, DEAL, NOTE, TASK, WANT = "CRM Lead", "CRM Deal", "FCRM Note", "CRM Task", "CRM Want"
 DOCTYPE = {"lead": LEAD, "deal": DEAL}
 OWNER = {LEAD: "lead_owner", DEAL: "deal_owner"}
 OTHER_MAIL = "Other mail"
@@ -24,6 +24,8 @@ _FIELDS = {LEAD: ["name", "lead_name", "email", "mobile_no", "status", "lead_own
                   "ffl_mail_category", "modified"],
            DEAL: ["name", "lead_name", "email", "mobile_no", "status", "deal_owner", "deal_value",
                   "communication_status", "erpnext_customer", "modified"]}
+_WANT_FIELDS = ["name", "status", "contact", "customer", "deal", "want_owner", "keywords", "item", "budget",
+                "notes", "matched_item", "matched_serial", "matched_on", "arrival_task"]
 
 
 def register(mcp: Any) -> None:
@@ -135,3 +137,38 @@ def register(mcp: Any) -> None:
         if not (isinstance(linked, dict) and linked.get("customer")):
             return linked
         return client.call_method(_API + "open_deal_order", {"deal": deal})
+
+    @mcp.tool()
+    def crm_want(action: Literal["list", "add", "close"] = "list", name: str | None = None,
+                 deal: str | None = None, keywords: str | None = None, item: str | None = None,
+                 budget: float | None = None, notes: str | None = None, customer: str | None = None,
+                 owner: str | None = None, include_closed: bool = False, limit: int = 50,
+                 confirm: bool = False) -> Any:
+        """The want list: what a customer is after that the store does not have. When stock that fits
+        arrives (the same item, or every keyword in the gun's name, brand, model, caliber or
+        description), the want's owner gets a CRM task; nothing is sent to the customer.
+        list (read-only): open and matched wants, newest first, by deal, customer or owner.
+        add: a want for a deal's primary contact, with keywords ("Mosin 91/30"), an item, or both.
+        close: stop alerting on want *name*. add and close require confirm=true."""
+        client = get_client()
+        if action == "list":
+            filters: list = [] if include_closed else [[WANT, "status", "!=", "Closed"]]
+            for field, value in (("deal", deal), ("customer", customer), ("want_owner", owner)):
+                if value:
+                    filters.append([WANT, field, "=", value])
+            return client.list_documents(WANT, fields=_WANT_FIELDS, filters=filters,
+                                         limit=min(max(limit, 1), 100), order_by="creation desc")
+        if action == "add":
+            if not deal:
+                raise ValueError("add needs deal.")
+            if not (keywords or "").strip() and not item:
+                raise ValueError("add needs keywords, an item, or both.")
+            require_confirm(f"crm_want add on {DEAL} {deal}", confirm)
+            return client.call_method(_API + "add_want", {"deal": deal, "keywords": keywords, "item": item,
+                                                          "budget": budget, "notes": notes})
+        if not name:
+            raise ValueError("close needs name.")
+        require_confirm(f"crm_want close {name}", confirm)
+        values = {"status": "Closed"}
+        check_fields_writable(WANT, values)
+        return client.update_document(WANT, name, values)

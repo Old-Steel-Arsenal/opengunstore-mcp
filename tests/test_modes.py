@@ -139,14 +139,14 @@ class RegistrationLayer(unittest.TestCase):
 		self.assertEqual(len(mcp.tools), 30)
 
 	def test_default_full_mode_holds_both_opt_in_sets_back(self):
-		"""Default full mode is 172, not 180: the 4 distributor queue actions and the
+		"""Default full mode is 173, not 181: the 4 distributor queue actions and the
 		4 GunBroker write actions each require an explicit opt-in. Pinned separately
 		from the full surface so that turning either gate into a no-op would break a
 		test rather than quietly restore the wider surface."""
 		mcp = FakeMCP()
 		with _actions(None):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 172)
+		self.assertEqual(len(mcp.tools), 173)
 		for name in ("distributor_confirm_order", "distributor_cancel_order",
 				"distributor_reroute", "distributor_update_order_ffl",
 				"gb_push_serial", "gb_end_listing", "gb_pull_orders", "gb_update_listing"):
@@ -186,7 +186,7 @@ class RegistrationLayer(unittest.TestCase):
 		mcp = FakeMCP()
 		with _actions("1", gb="1"):
 			server.register_tools(mcp, mode="full")
-		self.assertEqual(len(mcp.tools), 180)
+		self.assertEqual(len(mcp.tools), 181)
 		self.assertTrue(EXPECTED_CPA_TOOLS <= set(mcp.tools))
 		# regression: none of the write faces leaked out of full mode
 		for name in ("frappe_run_method", "dispose_order", "receive_goods",

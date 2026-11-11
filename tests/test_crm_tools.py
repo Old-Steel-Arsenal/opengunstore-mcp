@@ -37,7 +37,9 @@ class CRMTools(unittest.TestCase):
     def test_every_write_needs_confirm(self):
         for tool, kwargs in (("crm_lead_action", {"action": "convert", "name": "L"}),
                              ("crm_note_task", {"what": "note", "kind": "deal", "name": "D", "title": "T"}),
-                             ("crm_open_order", {"deal": "D"})):
+                             ("crm_open_order", {"deal": "D"}),
+                             ("crm_want", {"action": "add", "deal": "D", "keywords": "P228"}),
+                             ("crm_want", {"action": "close", "name": "WANT-00001"})):
             with self.assertRaises(WriteRefused, msg=tool):
                 self.t[tool](**kwargs)
         self.assertFalse(self.client.mock_calls)
@@ -96,3 +98,31 @@ class CRMTools(unittest.TestCase):
     def test_open_order_takes_one_or_the_other(self):
         with self.assertRaises(ValueError):
             self.t["crm_open_order"]("D", customer="C", create_customer=True)
+
+    def test_want_list_is_a_read_that_leaves_closed_wants_out(self):
+        self.t["crm_want"](deal="D", owner="a@b.c")
+        doctype, = self.client.list_documents.call_args.args
+        filters = self.client.list_documents.call_args.kwargs["filters"]
+        self.assertEqual(doctype, "CRM Want")
+        self.assertEqual(filters, [["CRM Want", "status", "!=", "Closed"], ["CRM Want", "deal", "=", "D"],
+                                   ["CRM Want", "want_owner", "=", "a@b.c"]])
+        self.t["crm_want"](include_closed=True)
+        self.assertEqual(self.client.list_documents.call_args.kwargs["filters"], [])
+        self.client.call_method.assert_not_called()
+        self.client.update_document.assert_not_called()
+
+    def test_want_add_goes_through_the_pos_endpoint(self):
+        self.t["crm_want"](action="add", deal="D", keywords="Mosin 91/30", budget=600, confirm=True)
+        self.client.call_method.assert_called_once_with("ffl_core.api.crm.add_want", {
+            "deal": "D", "keywords": "Mosin 91/30", "item": None, "budget": 600, "notes": None})
+
+    def test_want_add_and_close_check_their_arguments_before_any_call(self):
+        for kwargs in ({"action": "add", "keywords": "P228"}, {"action": "add", "deal": "D", "keywords": "  "},
+                       {"action": "close"}):
+            with self.assertRaises(ValueError, msg=kwargs):
+                self.t["crm_want"](confirm=True, **kwargs)
+        self.assertFalse(self.client.mock_calls)
+
+    def test_want_close_only_sets_the_status(self):
+        self.t["crm_want"](action="close", name="WANT-00001", confirm=True)
+        self.client.update_document.assert_called_once_with("CRM Want", "WANT-00001", {"status": "Closed"})

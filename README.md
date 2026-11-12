@@ -269,6 +269,12 @@ connector URL in claude.ai (Settings → Connectors) or Claude Code
 (`claude mcp add --transport http <name> <url>`), signs in to the POS in the browser
 and approves. No key is typed anywhere, and the server holds none.
 
+**Several stores.** Each store's POS serves its own connector, and all of them carry
+the same tool names. Give each one a name that says which store it is
+(`claude mcp add --transport http gunstore-pos-<store> <url>`). The server tells the
+model which POS host it controls (in its instructions and in every `confirm` refusal),
+so an assistant with two stores connected can check before it writes.
+
 - Every request carries that user's bearer token. The server checks it against the
   POS (`ffl_core.api.connector.connector_identity`, cached 60 s; the token is never
   logged or cached in the clear) and forwards it on every call, so **each call runs

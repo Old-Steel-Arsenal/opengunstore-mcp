@@ -16,6 +16,10 @@ the authority on exact signatures.
 3. **Credentials never travel through this MCP.** Password and API-key fields are stripped
    on write and are never returned on read. Change secrets in the POS Desk (My Settings,
    or the relevant Settings page).
+4. **One server is one store.** Each store's POS runs its own server, and they all carry
+   the same tool names. The server's instructions name its POS host, and so does every
+   `confirm` refusal (`'ship_order' on pos.example.com is destructive…`). With more than
+   one store connected, check that host before a write.
 
 Every Woo-related tool takes an optional `site` argument; the only value is `retail`
 (the default). The separate dealer storefront was retired with POS 1.11.0.

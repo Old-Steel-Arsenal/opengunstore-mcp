@@ -34,6 +34,16 @@ def get_transport() -> str:
     return raw
 
 
+def store_host() -> str:
+    """The POS this server points at (the host of FRAPPE_BASE_URL), "" when unset.
+
+    Every store runs its own server with the same tool names, so with several
+    connected this host is what tells them apart: it goes into the server's
+    instructions and into each confirm refusal."""
+    _load_env()
+    return urlparse((os.environ.get("FRAPPE_BASE_URL") or "").strip()).netloc
+
+
 @dataclass(frozen=True)
 class Config:
     base_url: str

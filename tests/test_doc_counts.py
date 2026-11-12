@@ -238,7 +238,7 @@ class ExactClaims(unittest.TestCase):
         self.assertEqual(L["actions"], 4)
         self.assertEqual(L["gb_actions"], 4)
         self.assertEqual(L["gb_readonly"], 6)
-        self.assertEqual((L["range"], L["range_default"]), (6, 0))
+        self.assertEqual((L["range"], L["range_default"]), (7, 0))
 
     def test_the_gunbroker_buckets_are_read_off_the_surface(self):
         """gb_readonly is derived, so it has to be shown to be derived: every gb_

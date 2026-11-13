@@ -5,6 +5,8 @@ tag and the Caddy routes live in the opengunstore repo:
 
 - `deploy/prod/mcp/compose.yaml` — read-only (8781) and full (8782) servers on
   each store's POS host, host network, loopback only;
+  plus the website connector (`GUNSTORE_MCP_MODE=web`), started only on a host
+  where the store has put its site credentials;
 - `deploy/prod/mcp/version.env` — `MCP_TAG=sha-<7>`, the build that POS release runs;
 - `deploy/prod/auto_deploy.sh` — brings them up after every POS deploy;
 - `deploy/prod/caddy-connector.caddy` — the routes in each `pos.<domain>` block;

@@ -321,6 +321,49 @@ so an assistant with two stores connected can check before it writes.
   *Enable Dynamic Client Registration* on; *Skip Authorization* off (every user
   approves). Revoke a user's access in Desk under OAuth Bearer Token.
 
+## Website connector (WordPress abilities bridge, read-only)
+
+`GUNSTORE_MCP_MODE=web` turns the remote server into a read-only connector for the
+store's WordPress site: people sign in with their POS account exactly as above, and
+the server calls the site's [Abilities API](https://developer.wordpress.org/apis/abilities/)
+on their behalf. It registers no POS tools. Server name `gunstore-web-ro`; POS
+connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
+
+- **The site is called as one service account** (a WordPress user with an
+  application password, HTTP Basic), through core's REST routes:
+  `GET /wp-json/wp-abilities/v1/abilities/<name>` for the schema at start, and
+  `GET …/<name>/run?input[...]=…` per call. Every call is a GET, which WordPress
+  itself refuses for an ability that is not read-only.
+- **Two gates, both must pass, failing closed**: an ability becomes a tool only if
+  it is in this deployment's list **and** the site's metadata says
+  `annotations.readonly: true`. Anything else (a write, missing or non-boolean
+  annotation, not on the site) is skipped and named in the startup log. Lists are
+  deployment configuration; the code names no ability.
+- **One tool per ability**, named mechanically (`woocommerce/orders-query` →
+  `woocommerce_orders_query`), with the site's description and input schema, marked
+  `readOnlyHint`.
+- **Who may call what**: the POS reports each user's website role
+  (`connector_identity` → `web_access`: `viewer`, `manager` or none). No role: every
+  call is refused. Abilities in `WEB_ABILITIES_RESTRICTED` (e.g. contact-level data)
+  run only for `manager`; a viewer gets a plain refusal, not a sign-in prompt.
+- **Audited like every connector call**: the Connector Audit Log row (surface
+  `web_ro`) is written before the site is called; if it cannot be, the site is not
+  called. A call refused for the user's website role is recorded as failed.
+- **Errors in plain words**: the site rejecting the service account (401), the account
+  lacking a capability (403), an ability gone (404), input refused (4xx), site errors
+  (5xx), timeouts (30 s) and non-JSON pages each get one sentence. The application
+  password never appears in logs, the audit trail, results or errors.
+- **Results over 150,000 characters are cut** with a note to use the ability's paging
+  or filter parameters.
+- **Site down at start**: the server starts anyway and retries loading the abilities
+  in the background (15 s, doubling to 5 min); tools appear once the site answers. A
+  client that connected meanwhile sees them after reconnecting.
+- Env, on top of the remote connector's (`GUNSTORE_MCP_TRANSPORT=http` is required;
+  stdio refuses to start): `WEB_SITE_URL` (https; plain http only for localhost),
+  `WEB_SITE_USER`, `WEB_SITE_APP_PASSWORD`, and `WEB_ABILITIES` /
+  `WEB_ABILITIES_RESTRICTED` (comma-separated ability names; at least one). A missing
+  or malformed setting refuses to start and says which.
+
 ## Security notes
 
 - Local (stdio) server: uses the key's user (Administrator) = full access. Run it

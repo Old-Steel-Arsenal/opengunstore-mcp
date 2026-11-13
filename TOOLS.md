@@ -543,6 +543,21 @@ expenses and supplier invoices are kept in another ledger.
 A dedicated `stock_valuation` tool is deliberately not provided: for a year-end inventory
 tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
+## 10b. Website connector (`GUNSTORE_MCP_MODE=web`, remote only)
+
+A separate server mode that registers **none** of the POS tools above. Its tools are
+the store's WordPress abilities that the deployment lists (`WEB_ABILITIES`,
+`WEB_ABILITIES_RESTRICTED`) **and** the site marks `readonly: true`; so the tool list
+is decided per store, not here. Each ability becomes one read-only tool named after
+it (`woocommerce/orders-query` → `woocommerce_orders_query`) with the site's own
+description and input schema; pass the arguments that schema lists (paging is
+usually `page` / `per_page`).
+
+- Needs a website role in the POS: Website Viewer runs the listed abilities, Website
+  Manager also the restricted ones (their description says so).
+- Results longer than 150,000 characters are cut; ask for a smaller page.
+- Nothing here writes to the site. Setup, gates and errors: README, "Website connector".
+
 ## 11. What this MCP cannot do (use another route)
 
 | Cannot do | Alternative |

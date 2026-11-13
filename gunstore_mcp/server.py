@@ -10,7 +10,8 @@ the POS (auth.FrappeTokenVerifier) and forwarded on every call.
 
 Modes (GUNSTORE_MCP_MODE): "full" (default) = the whole surface; "cpa" = the
 read-only accountant surface (exactly the tools in modes.CPA_TOOL_NAMES; the
-write tools are never registered).
+write tools are never registered); "web" = the WordPress abilities bridge (web.py:
+a site's read-only abilities, no POS tools, remote only).
 
 GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1 additionally opts into the 4 distributor queue
 actions, which are NOT registered otherwise. Sizes are asserted in tests rather
@@ -33,7 +34,7 @@ from starlette.routing import Route
 from . import __version__, audit
 from .auth import FrappeTokenVerifier
 from .config import HTTP, get_config, get_transport, store_host
-from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, FilteredMCP, get_mode
+from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, WEB_MODE, WEB_SURFACE, FilteredMCP, get_mode
 from .tools import (crm, compliance, curated, customers, distributor, generic, hr, orders, range_board,
                     reports, services, shopfloor)
 
@@ -135,7 +136,7 @@ def _http_settings() -> dict:
         # requests, and a session id is not a credential anybody could replay.
         "stateless_http": True,
         "token_verifier": FrappeTokenVerifier(cfg.backend_url, cfg.backend_host, cfg.timeout,
-                                              surface=get_mode()),
+                                              surface=SURFACE[get_mode()]),
         "auth": AuthSettings(issuer_url=cfg.base_url, resource_server_url=cfg.public_url),
         # Bound to loopback, the SDK would otherwise allow only localhost Host
         # headers and refuse every request the proxy forwards.
@@ -162,16 +163,28 @@ def _instructions() -> str | None:
             "name the store.")
 
 
+# mode -> the POS connector surface it verifies tokens and audits calls under.
+SURFACE = {FULL_MODE: FULL_MODE, CPA_MODE: CPA_MODE, WEB_MODE: WEB_SURFACE}
+SERVER_NAMES = {FULL_MODE: "gunstore-pos", CPA_MODE: "gunstore-pos-cpa", WEB_MODE: "gunstore-web-ro"}
+
+
 def build() -> FastMCP:
     mode = get_mode()
     remote = get_transport() == HTTP
+    if mode == WEB_MODE and not remote:
+        # It signs users in through the POS and audits there; a local server has neither.
+        raise RuntimeError("GUNSTORE_MCP_MODE=web runs only as the remote connector "
+                           "(GUNSTORE_MCP_TRANSPORT=http).")
     kwargs = _http_settings() if remote else {}
-    mcp = FastMCP("gunstore-pos" if mode == FULL_MODE else "gunstore-pos-cpa",
-                  instructions=_instructions(), **kwargs)
+    mcp = FastMCP(SERVER_NAMES[mode], instructions=_instructions(), **kwargs)
     # FastMCP takes no version; without this serverInfo reports the mcp SDK's
     # version, so clients can't tell which build of ours they're talking to.
     mcp._mcp_server.version = __version__
-    register_tools(ThreadedMCP(mcp, mode) if remote else mcp, mode)
+    if mode == WEB_MODE:
+        from . import web
+        web.register(mcp)
+    else:
+        register_tools(ThreadedMCP(mcp, mode) if remote else mcp, mode)
     return mcp
 
 

@@ -69,6 +69,12 @@ class Config:
 _config: Config | None = None
 
 
+def secure_url(url: str) -> bool:
+    """A URL credentials may travel to: https, or plain http only for a local dev stack."""
+    return url.startswith(("https://", "http://localhost:", "http://127.0.0.1:",
+                           "http://dev.localhost:"))
+
+
 def _load_env() -> None:
     # .env sits at the repo root, two levels up from gunstore_mcp/config.py.
     env_path = Path(__file__).resolve().parent.parent / ".env"
@@ -93,12 +99,7 @@ def get_config() -> Config:
         api_key = api_secret = ""
         public_url = (os.environ.get("GUNSTORE_MCP_PUBLIC_URL") or "").rstrip("/")
         raw_port = os.environ.get("GUNSTORE_MCP_PORT") or ""
-        def secure(url: str) -> bool:
-            # The user's POS token travels to base_url on every call; plain http
-            # is allowed only for a local dev stack.
-            return url.startswith(("https://", "http://localhost:", "http://127.0.0.1:",
-                "http://dev.localhost:"))
-        if not (secure(base_url) and secure(public_url)
+        if not (secure_url(base_url) and secure_url(public_url)
                 and public_url.endswith("/mcp") and "//" not in urlparse(public_url).path
                 and raw_port.isdigit()):
             raise RuntimeError(

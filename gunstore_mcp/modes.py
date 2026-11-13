@@ -27,7 +27,11 @@ from .config import _load_env
 
 FULL_MODE = "full"
 CPA_MODE = "cpa"
-_VALID_MODES = (FULL_MODE, CPA_MODE)
+# The WordPress abilities bridge (web.py): no POS tools at all, only a site's
+# read-only abilities. Its connector surface in the POS is "web_ro".
+WEB_MODE = "web"
+WEB_SURFACE = "web_ro"
+_VALID_MODES = (FULL_MODE, CPA_MODE, WEB_MODE)
 
 
 class CpaModeRefused(RuntimeError):

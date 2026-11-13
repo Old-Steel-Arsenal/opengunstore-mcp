@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-187 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 6 CRM + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 6 Range; 173 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 6 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+188 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 6 CRM + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 7 Range; 173 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 7 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 30 tools (the write surface is never registered), a per-name read-only
@@ -245,7 +245,8 @@ Attendance, shifts and leave only; payroll is out of scope. Every write needs `c
 ### Range board (`tools/range_board.py`, opt-in via `GUNSTORE_MCP_RANGE=1`)
 | Tool | Purpose |
 |---|---|
-| `range_board` / `range_free_lanes` / `range_find_bookings` | one day's board / lanes free at a time / a customer's bookings (read-only) |
+| `range_board` / `range_free_lanes` / `range_find_bookings` | one day's board / lanes free at a time / a customer's bookings, each with its guests: service, discount, waiver, checked in, paid, invoice (read-only) |
+| `range_guests` | who is on a booking, what each owes and who has paid, and the tickets Check out would open (read-only) |
 | `range_book` / `range_update` / `range_cancel` | book a lane or block / change a booking / cancel with a reason (`confirm`) |
 
 ### CPA reports (read-only; registered in both modes)

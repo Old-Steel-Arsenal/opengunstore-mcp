@@ -53,6 +53,13 @@ _ALWAYS_CONFIRM_METHODS = {
     "osa_range.api.board.create_booking",
     "osa_range.api.board.update_booking",
     "osa_range.api.board.cancel_booking",
+    # The board's guest and ticket writes (osa_range 0.4.0), not wrapped by a dedicated tool:
+    # checkout opens register tickets, email_range_ticket mails a customer.
+    "osa_range.api.board.set_guests",
+    "osa_range.api.board.check_in",
+    "osa_range.api.board.checkout",
+    "osa_range.api.board.set_status",
+    "osa_range.api.board.email_range_ticket",
     "ffl_core.api.manual_order.update_order",
     "osa_consignment.api.consignment_out.update_consignment_line_prices",
     "osa_consignment.api.consignment_out.create_consignment_out",

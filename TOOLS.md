@@ -215,7 +215,7 @@ Open zone is a single named location (shelf, case, safe) with no capacity limit.
 | Undo a move | `storage_undo_move` | yes | Manual moves only, one step, and only while the thing is still where it was put; `ok=false` is a reply |
 | Confirm where sold units came from | `storage_confirm_taken` | yes | The only action that takes a quantity out of a location; cannot exceed the pending amount |
 
-## 3c. Range board (`tools/range_board.py`): 6 Range tools, three that read and three that write
+## 3c. Range board (`tools/range_board.py`): 7 Range tools, four that read and three that write
 
 Only for a store running the **Range** extension (osa_range, paid, on stores Old Steel Arsenal
 hosts): registered when `GUNSTORE_MCP_RANGE=1` (the POS deploy's `MCP_RANGE`), otherwise
@@ -225,14 +225,17 @@ that the user holds a counter role, and every booking rule. Days are `YYYY-MM-DD
 
 | Tool | What it does |
 |---|---|
-| `range_board(date?)` | One day: hours, lanes by area, services, every booking (who, what, when, lanes, note, `moved_note` = tell the customer), block reasons. Read-only. |
+| `range_board(date?)` | One day: hours, lanes by area, services, every booking (who, what, when, status, lanes, note, `moved_note` = tell the customer) with its `guests`, block reasons. Each guest: `customer`, `customer_name`, `service`, `discount` / `discount_note` (reason) / `discount_by`, `firearm_pistol` / `firearm_rifle` / `firearm_shotgun`, `checked_in_at`, `invoice` (their register ticket), `paid`, `split_ways`, `consolidated_invoice` (the day's Sales Invoice it went into), `waiver` (signed, expiring, expired, pending, missing; null = no waiver needed). Read-only. |
 | `range_free_lanes(date, start, end, service?, exclude_lanes?)` | Lanes free then (cleaning included), only in the service's areas. Read-only. |
-| `range_find_bookings(customer?, date_from?, date_to?, include_cancelled?)` | A customer's (or everyone's) bookings, earliest first; `truncated` when the POS hit its limit. Read-only. |
+| `range_find_bookings(customer?, date_from?, date_to?, include_cancelled?)` | A customer's (or everyone's) bookings, earliest first, with the same `guests` (without `waiver` and `consolidated_invoice`), `cancel_reason` and `no_show_reason`; `truncated` when the POS hit its limit. Read-only. |
+| `range_guests(booking, mode?, payer?, ways?)` | Who is on a booking and what each pays: per guest the service, discount and reason, list price, rate, amount, `paid`, live `invoice`, waiver; the tickets Check out would open now (unpaid guests not on a ticket), with each person's share for `mode=split`. The board's Check out preview: nothing is opened. Read-only. |
 | `range_book(kind, date, start, end, lanes, …, confirm)` | Reservation (customer, service, party_size), Custom Slot (customer, custom_title, custom_price) or Block (block_reason). Never moves another booking to make room: a clash is refused naming the booking in the way. `confirm=true`. |
 | `range_update(booking, start?, end?, lanes?, note?, party_size?, confirm)` | Change time on the same day, lanes, note or people; re-reads the booking first. `confirm=true`. |
 | `range_cancel(booking, reason, confirm)` | Cancel with a reason; it stays in the bookings list. `confirm=true`. |
 
-The three board writes are also in `frappe_run_method`'s always-confirm list.
+The three board writes are also in `frappe_run_method`'s always-confirm list, and so are the board's guest and ticket writes no tool wraps (`set_guests`, `check_in`, `checkout`, `set_status`, `email_range_ticket`).
+
+Every answer is listed field by field: the booking's `modified` and `title`, and a preview line's `item_code`, are left out, and a field the POS adds later stays out until it is listed in `range_board.py`.
 
 ## 4. Orders, payment and shipping (the Pending Order queue)
 
@@ -469,8 +472,8 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-187 tools, of which 173 register by default (the 4 distributor queue actions, the 4
-GunBroker write actions and the 6 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
+188 tools, of which 173 register by default (the 4 distributor queue actions, the 4
+GunBroker write actions and the 7 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
 refusing". There are three layers of defence, and each still holds if another fails:
@@ -554,4 +557,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 187 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 6 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 6 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.13.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.14.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

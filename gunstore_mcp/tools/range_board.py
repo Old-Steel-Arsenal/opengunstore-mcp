@@ -8,10 +8,13 @@ counter's own endpoint (``osa_range.api.board``), which checks that Range is on 
 caller holds a counter role, and applies every booking rule (opening hours, time step, lane
 capacity, service areas, cleaning time, no lane booked twice).
 
-Reads: ``range_board``, ``range_free_lanes``, ``range_find_bookings``. Writes need
+Reads: ``range_board``, ``range_free_lanes``, ``range_find_bookings``, ``range_guests``. Writes need
 ``confirm=true``: ``range_book``, ``range_update``, ``range_cancel``. ``range_book`` never moves
 another booking out of the way (the board's ``moves``); a clash is refused with the POS's
 message, which names the booking in the way.
+
+What comes back is listed field by field (``_BOOKING_KEYS``, ``_GUEST_KEYS``, ``_LINE_KEYS``), never
+the POS answer as a whole: a field the POS adds later stays out until it is listed here.
 
 Times are the store's day as ``HH:MM`` (24-hour); a day is ``YYYY-MM-DD``.
 """
@@ -39,6 +42,17 @@ _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 _BOOKING_KEYS = ("name", "booking_type", "status", "source", "customer", "customer_name", "party_size",
                  "service", "custom_title", "custom_price", "block_reason", "note", "moved_note", "starts_at",
                  "ends_at", "lanes")
+# A booking's guest (osa_range booking.GUEST_FIELDS, plus get_board's waiver and consolidated_invoice).
+# Nothing personal beyond the name is on a guest row; listing the keys keeps it that way.
+_GUEST_KEYS = ("customer", "customer_name", "service", "discount", "discount_note", "discount_by",
+               "firearm_pistol", "firearm_rifle", "firearm_shotgun", "checked_in_at", "invoice", "paid",
+               "split_ways", "waiver", "consolidated_invoice")
+# checkout_preview: one line per guest with what they pay, and the tickets check-out would open.
+_LINE_KEYS = ("customer", "customer_name", "service", "service_name", "discount", "discount_name", "note",
+              "qty", "list_rate", "rate", "amount", "nothing_to_pay", "invoice", "paid", "split_ways", "waiver")
+_TICKET_KEYS = ("customer", "customer_name", "guests", "total", "ways", "shares")
+_PREVIEW_KEYS = ("booking", "mode", "payer", "ways", "selected", "total", "waiver_needed", "waiver_missing",
+                 "on_ticket", "nothing_to_pay")
 
 
 def range_enabled() -> bool:
@@ -60,8 +74,15 @@ def _stamp(day: str, hhmm: str, what: str) -> str:
     return f"{day} {hhmm}:00"
 
 
+def _pick(row: dict, keys: tuple) -> dict:
+    return {k: row.get(k) for k in keys if k in row}
+
+
 def _booking(row: dict) -> dict:
-    return {k: row.get(k) for k in _BOOKING_KEYS if k in row}
+    out = _pick(row, _BOOKING_KEYS)
+    if isinstance(row.get("guests"), list):
+        out["guests"] = [_pick(g, _GUEST_KEYS) for g in row["guests"] if isinstance(g, dict)]
+    return out
 
 
 def register(mcp: Any) -> None:
@@ -77,8 +98,15 @@ def register(mcp: Any) -> None:
         (name, service_name, default_minutes, active, areas — empty areas = any area), every
         booking that day (name, booking_type Reservation|Block|Custom Slot, customer_name,
         party_size, service, block_reason, note, moved_note — a booking moved to another lane
-        whose customer must be told, starts_at, ends_at, lanes), the block reasons and the
-        "booked by" sources. date: YYYY-MM-DD, empty = today. Read-only."""
+        whose customer must be told, starts_at, ends_at, lanes, status Reserved|Checked In|
+        Completed, and guests), the block reasons and the "booked by" sources. Each guest:
+        customer, customer_name, service, discount + discount_note (the reason) + discount_by,
+        firearm_pistol/rifle/shotgun, checked_in_at (empty = not checked in), invoice (their
+        register ticket), paid (1 = paid), split_ways (people sharing a split ticket),
+        consolidated_invoice (the day's Sales Invoice the paid ticket went into) and waiver
+        (signed|expiring|expired|pending|missing; null = the store needs no waiver). So it answers
+        "who is on this booking, who has paid, which invoice". date: YYYY-MM-DD, empty = today.
+        Read-only."""
         out = get_client().get_method(_B + "get_board", {"date": _day(date) if date else None})
         if isinstance(out, dict) and isinstance(out.get("bookings"), list):
             out = {**out, "bookings": [_booking(b) for b in out["bookings"]]}
@@ -99,7 +127,8 @@ def register(mcp: Any) -> None:
     def range_find_bookings(customer: str | None = None, date_from: str | None = None,
                             date_to: str | None = None, include_cancelled: bool = False) -> Any:
         """Bookings over a stretch of days, earliest first: {bookings: [...same fields as
-        range_board, plus date and (cancelled) cancel_reason], truncated}. customer: a Customer
+        range_board, guests included but without waiver and consolidated_invoice, plus date and
+        (cancelled / no-show) cancel_reason, no_show_reason], truncated}. customer: a Customer
         id or part of a customer's name; empty = everyone. date_from empty = today; date_to
         empty = 30 days after date_from (at most a year). truncated=true means the POS stopped
         at its limit — narrow the dates or the customer. Read-only."""
@@ -107,9 +136,33 @@ def register(mcp: Any) -> None:
             "customer": customer, "date_from": _day(date_from, "first day") if date_from else None,
             "date_to": _day(date_to, "last day") if date_to else None,
             "include_cancelled": 1 if include_cancelled else 0}) or []
-        return {"bookings": [{**_booking(r), "date": r.get("date"), "cancel_reason": r.get("cancel_reason")}
-                             for r in rows],
+        return {"bookings": [{**_booking(r), "date": r.get("date"), "cancel_reason": r.get("cancel_reason"),
+                              "no_show_reason": r.get("no_show_reason")} for r in rows],
                 "truncated": len(rows) >= FIND_LIMIT}
+
+    @mcp.tool()
+    def range_guests(booking: str, mode: Literal["one", "each", "split"] = "one", payer: str | None = None,
+                     ways: int | None = None) -> Any:
+        """A booking's guests (RNG-…) with what each one pays and who has paid — "who still owes
+        on this booking, and how much?". Nothing is opened or charged: this is the board's
+        Check out preview. {booking, guests: [{customer, customer_name, service, service_name,
+        discount, discount_name, note (the discount's reason), qty, list_rate, rate, amount,
+        nothing_to_pay, invoice (a live register ticket), paid (1 = paid), split_ways, waiver}],
+        selected (the guests check-out would take now: not paid, not on a ticket, something to
+        pay), tickets: [{customer (who the ticket is for), customer_name, guests, total, and for
+        split: ways, shares}], total, waiver_needed, waiver_missing / on_ticket / nothing_to_pay
+        (names among the selected)}. mode: one (one ticket for the payer), each (each guest their
+        own) or split (one ticket shared evenly by `ways` people, 2–50; shares in whole cents).
+        payer: a guest's Customer id, empty = the first guest. Not for blocked time or a
+        cancelled booking (the POS says so). Read-only."""
+        out = get_client().get_method(_B + "checkout_preview", {
+            "name": booking, "mode": mode, "payer": payer, "ways": ways})
+        if not isinstance(out, dict):
+            return out
+        res = _pick(out, _PREVIEW_KEYS)
+        res["guests"] = [_pick(g, _LINE_KEYS) for g in out.get("guests") or [] if isinstance(g, dict)]
+        res["tickets"] = [_pick(t, _TICKET_KEYS) for t in out.get("tickets") or [] if isinstance(t, dict)]
+        return res
 
     # ===================================================== writes
 

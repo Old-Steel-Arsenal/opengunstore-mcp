@@ -4,6 +4,8 @@ the board's writes are gated for the bare frappe_run_method path too.
 
 Mocked like the rest of the suite; the endpoints were checked against osa-range main (0.2.1)
 when written: get_board / find_free_lanes / find_bookings answer GET only, the writes POST.
+The guest rows and checkout_preview answers below are shaped as osa-range 0.4.0 builds them
+(booking.board_row / guest_row / _booking_rows, api.board._annotate_guests, checkout.preview).
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ from gunstore_mcp.safety import WriteRefused
 from gunstore_mcp.tools import generic, range_board
 
 B = "osa_range.api.board."
-READS = {"range_board", "range_free_lanes", "range_find_bookings"}
+READS = {"range_board", "range_free_lanes", "range_find_bookings", "range_guests"}
 WRITES = {
     "range_book": ({"kind": "Block", "date": "2030-01-07", "start": "10:00", "end": "12:00",
                     "lanes": ["Bay 1"], "block_reason": "Maintenance"}, B + "create_booking"),
@@ -36,13 +38,46 @@ class FakeMCP:
         return deco
 
 
+# osa_range booking.guest_row (GUEST_FIELDS), as get_board annotates it (waiver, consolidated_invoice).
+GUEST = {"customer": "CUST-1", "customer_name": "Pat Doe", "service": "Lane hour", "discount": "MIL",
+         "discount_note": "Veteran", "discount_by": "clerk@example.com", "firearm_pistol": 1,
+         "firearm_rifle": 0, "firearm_shotgun": 0, "checked_in_at": "2030-01-07 09:55:00",
+         "invoice": "ACC-PSINV-0001", "paid": 1, "split_ways": 0, "waiver": "signed",
+         "consolidated_invoice": "ACC-SINV-0001"}
+GUEST_UNPAID = {**GUEST, "customer": "CUST-2", "customer_name": "Lee Roe", "discount": None,
+                "discount_note": "", "discount_by": None, "checked_in_at": None, "invoice": None,
+                "paid": 0, "waiver": "missing", "consolidated_invoice": None}
+# osa_range booking.board_row
+BOARD_ROW = {"name": "RNG-1", "booking_type": "Reservation", "status": "Checked In", "source": "Phone",
+             "customer": "CUST-1", "customer_name": "Pat Doe", "party_size": 2, "service": "Lane hour",
+             "custom_title": None, "custom_price": 0.0, "block_reason": None, "note": "", "moved_note": "",
+             "title": "Pat Doe ×2", "starts_at": "2030-01-07 10:00:00", "ends_at": "2030-01-07 11:00:00",
+             "lanes": ["Bay 1"], "modified": "2030-01-07 09:55:00.123", "guests": [GUEST, GUEST_UNPAID]}
+# osa_range checkout.preview (lines from _guest_lines)
+LINE = {"customer": "CUST-2", "customer_name": "Lee Roe", "service": "Lane hour", "service_name": "Lane hour",
+        "discount": None, "discount_name": "", "note": "", "qty": 1, "list_rate": 25.0, "rate": 25.0,
+        "amount": 25.0, "item_code": "RANGE-LANE-HOUR", "nothing_to_pay": False, "invoice": None, "paid": 0,
+        "split_ways": 0, "waiver": "missing"}
+PREVIEW = {"booking": "RNG-1", "modified": "2030-01-07 09:55:00.123", "mode": "split", "payer": "CUST-2",
+           "ways": 3, "guests": [LINE], "selected": ["CUST-2"],
+           "tickets": [{"customer": "CUST-2", "customer_name": "Lee Roe", "guests": ["CUST-2"], "total": 25.0,
+                        "ways": 3, "shares": [8.34, 8.33, 8.33]}],
+           "total": 25.0, "waiver_needed": True, "waiver_missing": ["Lee Roe"], "on_ticket": [],
+           "nothing_to_pay": []}
+
+
 class FakeClient:
     def __init__(self, rows=None):
         self.calls = []
         self.rows = rows
+        self.board = None
 
     def get_method(self, method, params=None):
         self.calls.append(("GET", method, params or {}))
+        if method.endswith("checkout_preview"):
+            return PREVIEW
+        if method.endswith("get_board") and self.board is not None:
+            return self.board
         if method.endswith("find_bookings"):
             return self.rows if self.rows is not None else [{"name": "RNG-1", "date": "2030-01-07",
                                                              "starts_at": "2030-01-07 10:00:00", "modified": "m"}]
@@ -101,6 +136,13 @@ class Writes(Base):
     def test_the_board_writes_are_gated_for_frappe_run_method_too(self):
         self.assertEqual(range_board.WRITE_METHODS, {m for _k, m in WRITES.values()})
         self.assertTrue(range_board.WRITE_METHODS <= generic._ALWAYS_CONFIRM_METHODS)
+        # Every POST endpoint of osa_range 0.4.0 api/board.py, wrapped or not.
+        for verb in ("set_guests", "check_in", "checkout", "set_status", "email_range_ticket"):
+            with self.subTest(verb=verb):
+                self.assertTrue(generic._needs_confirm(B + verb))
+        for read in ("get_board", "checkout_preview", "find_bookings", "find_free_lanes"):
+            with self.subTest(read=read):
+                self.assertFalse(generic._needs_confirm(B + read))
 
     def test_book_sends_the_board_payload_and_never_moves_anyone(self):
         self.tools["range_book"](kind="Reservation", date="2030-01-07", start="09:30", end="11:30",
@@ -154,6 +196,41 @@ class Reads(Base):
     def test_the_board_drops_bookkeeping_fields(self):
         out = self.tools["range_board"]()
         self.assertEqual(out["bookings"], [{"name": "RNG-1", "lanes": ["Bay 1"]}])
+
+    def test_board_shows_each_guest_and_who_paid_but_only_listed_fields(self):
+        extra = {**GUEST, "date_of_birth": "1990-01-01", "id_number": "D1234567"}   # never on a guest row today
+        self.client.board = {"date": "2030-01-07", "bookings": [{**BOARD_ROW, "guests": [extra, GUEST_UNPAID]}]}
+        (b,) = self.tools["range_board"](date="2030-01-07")["bookings"]
+        self.assertNotIn("modified", b)
+        self.assertNotIn("title", b)
+        self.assertEqual(b["status"], "Checked In")
+        self.assertEqual(b["guests"], [GUEST, GUEST_UNPAID])               # every guest field, nothing more
+        self.assertEqual([(g["customer_name"], g["paid"], g["invoice"]) for g in b["guests"]],
+                         [("Pat Doe", 1, "ACC-PSINV-0001"), ("Lee Roe", 0, None)])
+
+    def test_find_carries_guests_without_the_board_only_fields(self):
+        find_guest = {k: v for k, v in GUEST.items() if k not in ("waiver", "consolidated_invoice")}
+        self.client.rows = [{**BOARD_ROW, "guests": [find_guest], "date": "2030-01-07", "cancel_reason": None,
+                             "no_show_reason": None}]
+        (b,) = self.tools["range_find_bookings"]()["bookings"]
+        self.assertEqual(b["guests"], [find_guest])
+        self.assertNotIn("modified", b)
+        self.assertEqual((b["date"], b["no_show_reason"]), ("2030-01-07", None))
+
+    def test_a_booking_without_guests_has_no_guests_key(self):
+        out = self.tools["range_board"]()
+        self.assertNotIn("guests", out["bookings"][0])
+
+    def test_guests_is_the_checkout_preview_read_and_drops_bookkeeping(self):
+        out = self.tools["range_guests"](booking="RNG-1", mode="split", payer="CUST-2", ways=3)
+        self.assertEqual(self.client.calls, [("GET", B + "checkout_preview",
+                                              {"name": "RNG-1", "mode": "split", "payer": "CUST-2", "ways": 3})])
+        self.assertNotIn("modified", out)
+        (line,) = out["guests"]
+        self.assertNotIn("item_code", line)
+        self.assertEqual({**line, "item_code": LINE["item_code"]}, LINE)
+        self.assertEqual(out["tickets"], PREVIEW["tickets"])
+        self.assertEqual((out["total"], out["waiver_missing"], out["selected"]), (25.0, ["Lee Roe"], ["CUST-2"]))
 
     def test_find_says_when_the_pos_stopped_at_its_limit(self):
         self.assertFalse(self.tools["range_find_bookings"]()["truncated"])

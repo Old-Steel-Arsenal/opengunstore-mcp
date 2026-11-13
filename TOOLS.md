@@ -546,19 +546,28 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 ## 10b. Website connector (`GUNSTORE_MCP_MODE=web`, remote only)
 
 A separate server mode that registers **none** of the POS tools above. Its tools are
-the store's WordPress abilities that the deployment lists (`WEB_ABILITIES`,
-`WEB_ABILITIES_RESTRICTED`) **and** the site marks `readonly: true`; so the tool list
-is decided per store, not here. Each ability becomes one read-only tool named after
-it (`woocommerce/orders-query` → `woocommerce_orders_query`) with the site's own
-description and input schema; pass the arguments that schema lists (paging is
-usually `page` / `per_page`).
+the store's WordPress abilities that the deployment lists: reads (`WEB_ABILITIES`,
+`WEB_ABILITIES_RESTRICTED`) that the site also marks `readonly: true`, and writes
+(`WEB_ABILITIES_WRITE`, empty by default). So the tool list is decided per store, not
+here. Each ability becomes one tool named after it (`woocommerce/orders-query` →
+`woocommerce_orders_query`) with the site's own description and input schema; pass
+the arguments that schema lists (paging is usually `page` / `per_page`).
 
-- Needs a website role in the POS: Website Connector Viewer runs the listed abilities,
-  Website Connector Manager also the restricted ones (their description says so).
-- The server's instructions name the website it reads (the host of `WEB_SITE_URL`) and
-  say it is read-only.
+- Needs a website role in the POS: Website Connector Viewer runs the listed reads;
+  Website Connector Manager (or System Manager) also the restricted reads and the
+  writes. Their descriptions say so; a write's begins its last paragraph with
+  "Changes the website".
+- Write tools have `readOnlyHint: false`; deleting, sending, bulk and status-changing
+  ones also `destructiveHint: true`. Tell the user exactly what will change and wait
+  for a yes before calling one: it changes the live site.
+- `woocommerce_order_add_note`: `customer_note: true` emails the note to the customer;
+  leave it out (default false) for a private note.
+- A write that times out or gets a server error may still have happened: check the
+  site (read the record back) before calling it again.
+- The server's instructions name the website (the host of `WEB_SITE_URL`) and, when
+  no write is listed, say it is read-only.
 - Results longer than 150,000 characters are cut; ask for a smaller page.
-- Nothing here writes to the site. Setup, gates and errors: README, "Website connector".
+- Setup, gates, audit and errors: README, "Website connector".
 
 ## 11. What this MCP cannot do (use another route)
 
@@ -578,4 +587,4 @@ usually `page` / `per_page`).
 
 ---
 
-*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.15.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.16.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

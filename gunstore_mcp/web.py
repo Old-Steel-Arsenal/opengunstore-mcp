@@ -1,23 +1,26 @@
 """WordPress abilities bridge (GUNSTORE_MCP_MODE=web): a WordPress site's
-read-only abilities as a remote connector that people sign in to with their POS
-account.
+abilities as a remote connector that people sign in to with their POS account.
 
 Users sign in exactly as on the POS connectors (auth.FrappeTokenVerifier, surface
 "web_ro"), every call is recorded in the POS's Connector Audit Log before it runs
 (audit.py), and the site itself is called with ONE service account's application
 password (HTTP Basic) through WordPress core's Abilities REST API:
 
-  GET /wp-json/wp-abilities/v1/abilities/<name>       metadata, schema, annotations
-  GET /wp-json/wp-abilities/v1/abilities/<name>/run   run it; input as ?input[...]=
+  GET  /wp-json/wp-abilities/v1/abilities/<name>       metadata, schema, annotations
+  GET  /wp-json/wp-abilities/v1/abilities/<name>/run   run a read; input as ?input[...]=
+  POST /wp-json/wp-abilities/v1/abilities/<name>/run   run a write; input as {"input": ...}
 
-Read-only, twice over, failing closed: an ability is bridged only when it is in this
-deployment's list (WEB_ABILITIES / WEB_ABILITIES_RESTRICTED) AND the site's own
-metadata marks it readonly. Every call is a GET, which WordPress itself refuses for
-an ability that is not read-only. Restricted abilities run only for a user whose POS
-role gives website "manager" access.
+Reads, twice over and failing closed: an ability in WEB_ABILITIES or
+WEB_ABILITIES_RESTRICTED is bridged only when the site's own metadata also marks it
+readonly, and it is called with GET, which WordPress itself refuses for anything else.
 
-No ability name is written here: which abilities a store exposes is that store's
-deployment configuration.
+Writes are opt-in per deployment: exactly the abilities listed in WEB_ABILITIES_WRITE
+(empty = the connector stays read-only), whatever the site's annotations say; those
+only pick the HTTP method WordPress expects. Restricted reads and every write run only
+for a user whose POS role gives website "manager" access; a write's audit record keeps
+what it targets, not what it writes.
+
+Which abilities a store exposes is that store's deployment configuration, not code.
 """
 from __future__ import annotations
 
@@ -53,6 +56,10 @@ SITE_USER = "WEB_SITE_USER"
 SITE_PASSWORD = "WEB_SITE_APP_PASSWORD"
 ABILITIES = "WEB_ABILITIES"
 ABILITIES_RESTRICTED = "WEB_ABILITIES_RESTRICTED"
+ABILITIES_WRITE = "WEB_ABILITIES_WRITE"
+# What a listed ability is: a read anyone with website access may run, a read only a
+# manager may run, or a write (manager only).
+READ, RESTRICTED, WRITE = "read", "restricted", "write"
 # The POS roles that give website access (the POS decides; these name them to users).
 VIEWER_ROLE = "Website Connector Viewer"
 MANAGER_ROLE = "Website Connector Manager"
@@ -68,6 +75,18 @@ RETRY_MAX = 300
 # lazy: no per-user rate limit; every call is audited in the POS and the site's own
 # limits apply. Add a token bucket per POS user here if a client ever floods the site.
 
+# Writes that delete, send, bulk-change or move an order's status: marked destructive
+# (as is any the site itself marks destructive) so clients ask before each one. A hint
+# for the client's confirmation prompt, not a gate.
+_DESTRUCTIVE_WORDS = ("delete", "update-status", "change-campaign-status", "send", "bulk")
+# One sentence a write tool's description adds, where its own parameters do not say
+# what the change sets off (WC_Order::add_order_note fires woocommerce_new_customer_note
+# for a customer note, which sends WooCommerce's "Customer note" email).
+WRITE_NOTES = {
+    "woocommerce/order-add-note": "With customer_note true the note is also emailed to the "
+                                  "customer; without it (default false) the note is private.",
+}
+
 # WordPress's own rule for an ability name (WP_Abilities_Registry::register).
 _NAME = re.compile(r"^[a-z0-9-]+/[a-z0-9-]+$")
 _PLACEHOLDER_META = func_metadata(lambda: None, structured_output=False)
@@ -78,8 +97,8 @@ class WebConfig:
     site_url: str
     user: str
     password: str
-    # ability name -> restricted (manager only)
-    abilities: dict[str, bool]
+    # ability name -> READ, RESTRICTED or WRITE
+    abilities: dict[str, str]
 
 
 def tool_name(ability: str) -> str:
@@ -89,6 +108,11 @@ def tool_name(ability: str) -> str:
 
 def _list(var: str) -> list[str]:
     return [n.strip() for n in (os.environ.get(var) or "").split(",") if n.strip()]
+
+
+def writes_listed() -> bool:
+    """Whether this deployment lists any write ability (the connector is read-only otherwise)."""
+    return bool(_list(ABILITIES_WRITE))
 
 
 def load_config() -> WebConfig:
@@ -103,17 +127,25 @@ def load_config() -> WebConfig:
         # The application password travels to this URL on every call.
         raise RuntimeError(f"{SITE_URL} must be the site's https:// URL (plain http only for "
                            "localhost), without a query or credentials in it.")
-    plain, restricted = _list(ABILITIES), _list(ABILITIES_RESTRICTED)
-    if not plain and not restricted:
-        raise RuntimeError(f"GUNSTORE_MCP_MODE=web needs at least one ability in {ABILITIES} "
-                           f"or {ABILITIES_RESTRICTED} (comma-separated, e.g. woocommerce/orders-query).")
-    bad = [n for n in plain + restricted if not _NAME.match(n)]
+    lists = {ABILITIES: (READ, _list(ABILITIES)), ABILITIES_RESTRICTED: (RESTRICTED, _list(ABILITIES_RESTRICTED)),
+             ABILITIES_WRITE: (WRITE, _list(ABILITIES_WRITE))}
+    named = [n for _, names in lists.values() for n in names]
+    bad = [n for n in named if not _NAME.match(n)]
     if bad:
         raise RuntimeError(f"Not ability names (namespace/name): {', '.join(bad)}.")
-    both = sorted(set(plain) & set(restricted))
+    seen: dict[str, list[str]] = {}
+    for var, (_, names) in lists.items():
+        for n in dict.fromkeys(names):
+            seen.setdefault(n, []).append(var)
+    both = {n: v for n, v in seen.items() if len(v) > 1}
     if both:
-        raise RuntimeError(f"Listed in both {ABILITIES} and {ABILITIES_RESTRICTED}: {', '.join(both)}.")
-    abilities = {n: False for n in plain} | {n: True for n in restricted}
+        raise RuntimeError("Each ability belongs in one list; listed twice: " + "; ".join(
+            f"{n} ({' and '.join(v)})" for n, v in sorted(both.items())) + ".")
+    abilities = {n: kind for kind, names in lists.values() for n in names}
+    if not abilities:
+        raise RuntimeError(f"GUNSTORE_MCP_MODE=web needs at least one ability in {ABILITIES}, "
+                           f"{ABILITIES_RESTRICTED} or {ABILITIES_WRITE} (comma-separated, e.g. "
+                           "woocommerce/orders-query).")
     clash: dict[str, list[str]] = {}
     for n in abilities:
         clash.setdefault(tool_name(n), []).append(n)
@@ -156,8 +188,21 @@ def _query(prefix: str, value: Any, out: list) -> list:
     return out
 
 
+def http_method(annotations: Any) -> str:
+    """The method WordPress requires for an ability with these annotations
+    (WP_REST_Abilities_V1_Run_Controller::validate_request_method): GET for a
+    read-only one, DELETE for one both destructive and idempotent, POST otherwise.
+    Who may run it is decided by the configured lists, never by these."""
+    a = annotations if isinstance(annotations, dict) else {}
+    if a.get("readonly"):
+        return "GET"
+    if a.get("destructive") and a.get("idempotent"):
+        return "DELETE"
+    return "POST"
+
+
 class Site:
-    """The site, as the bridge's service account. GET only."""
+    """The site, as the bridge's service account."""
 
     def __init__(self, cfg: WebConfig) -> None:
         self.base = cfg.site_url + API
@@ -174,16 +219,22 @@ class Site:
             text = text.replace(s, "***")
         return text
 
-    def _get(self, ability: str, suffix: str = "", params: list | None = None) -> requests.Response:
+    def _send(self, ability: str, suffix: str = "", params: list | None = None,
+              method: str = "GET", body: dict | None = None) -> requests.Response:
         try:
-            # No retries: a slow query repeated would only load the site more.
-            return self.session.get(self.base + quote(ability, safe="/") + suffix, params=params,
-                                    auth=self._auth, timeout=SITE_TIMEOUT,
-                                    headers={"Accept": "application/json"})
-        except requests.Timeout:
-            raise SiteError(f"The website did not answer within {SITE_TIMEOUT} s. Try a narrower "
-                            "query, or try again later.") from None
+            # No retries: a slow query repeated would only load the site more, and a
+            # write repeated could be made twice.
+            return self.session.request(method, self.base + quote(ability, safe="/") + suffix,
+                                        params=params, json=body, auth=self._auth,
+                                        timeout=SITE_TIMEOUT, headers={"Accept": "application/json"})
         except requests.RequestException as e:
+            if method != "GET":
+                raise SiteError(f"No answer from the website for {ability} ({type(e).__name__}). "
+                                "The change may or may not have been made: check on the website "
+                                "before trying again.") from None
+            if isinstance(e, requests.Timeout):
+                raise SiteError(f"The website did not answer within {SITE_TIMEOUT} s. Try a narrower "
+                                "query, or try again later.") from None
             raise SiteError(f"Could not reach the website ({type(e).__name__}). "
                             "Try again later.") from None
 
@@ -199,12 +250,12 @@ class Site:
         return str(body.get("code") or ""), self.scrub(msg.strip())[:500]
 
     def _error(self, ability: str, resp: requests.Response) -> SiteError:
-        error = self._describe_error(ability, resp)
+        error = self._describe_error(ability, resp, resp.request.method if resp.request else "GET")
         error.status = resp.status_code
         error.code, error.said = self._message(resp)
         return error
 
-    def _describe_error(self, ability: str, resp: requests.Response) -> SiteError:
+    def _describe_error(self, ability: str, resp: requests.Response, method: str = "GET") -> SiteError:
         status = resp.status_code
         code, msg = self._message(resp)
         said = f" The website said: {msg}" if msg else ""
@@ -219,8 +270,15 @@ class Site:
             return SiteError(f"The website does not offer {ability} (its plugin may be off, or the "
                              "ability was renamed). Ask an administrator.")
         if status == 405:
-            return SiteError(f"The website no longer marks {ability} read-only, so this connector "
-                             "will not run it.")
+            if method == "GET":
+                return SiteError(f"The website no longer marks {ability} read-only, so this connector "
+                                 "will not run it.")
+            return SiteError(f"The website refused a {method} request for {ability} (its annotations "
+                             "may have changed). Nothing was changed. Ask an administrator.")
+        if status >= 500 and method != "GET":
+            return SiteError(f"The website failed while running {ability} (HTTP {status}).{said} "
+                             "The change may or may not have been made: check on the website "
+                             "before trying again.")
         if status >= 500:
             return SiteError(f"The website failed while running {ability} (HTTP {status}).{said} "
                              "Try again later.")
@@ -228,7 +286,7 @@ class Site:
                          + (said or ""))
 
     def _json(self, ability: str, resp: requests.Response) -> Any:
-        if resp.status_code != 200:
+        if not 200 <= resp.status_code < 300:
             raise self._error(ability, resp)
         try:
             return resp.json()
@@ -238,14 +296,19 @@ class Site:
 
     def describe(self, ability: str) -> dict | None:
         """The ability's metadata; None when the site definitively does not have it."""
-        resp = self._get(ability)
+        resp = self._send(ability)
         if resp.status_code == 404:
             return None
         meta = self._json(ability, resp)
         return meta if isinstance(meta, dict) else None
 
-    def run(self, ability: str, value: Any) -> str:
-        resp = self._get(ability, "/run", _query("input", value, []))
+    def run(self, ability: str, value: Any, method: str = "GET") -> str:
+        if method == "POST":
+            # The run controller reads a POST's input from the JSON body.
+            resp = self._send(ability, "/run", method=method,
+                              body={} if value is None else {"input": value})
+        else:
+            resp = self._send(ability, "/run", _query("input", value, []), method=method)
         text = self.scrub(json.dumps(self._json(ability, resp), ensure_ascii=False))
         if len(text) > RESULT_MAX_CHARS:
             text = (text[:RESULT_MAX_CHARS] + f"\n\n[Truncated: the result is {len(text)} characters "
@@ -328,11 +391,14 @@ def _empty_call_refusal(tool: str, schema: dict, site_error: SiteError) -> SiteE
 
 
 class SiteTool(Tool):
-    """One site ability as one MCP tool. `fn(input)` calls the site; run() adds the
-    role check and the audit record around it, in a worker thread."""
+    """One site ability as one MCP tool. `fn(ability, input, method)` calls the site;
+    run() adds the role check and the audit record around it, in a worker thread."""
 
     ability: str
+    # Manager only: a restricted read, or any write.
     restricted: bool
+    write: bool = False
+    method: str = "GET"
     input_mode: str
     # What a call without arguments sends (see _empty_input).
     empty_input: dict | None = None
@@ -345,16 +411,20 @@ class SiteTool(Tool):
             raise Refused(f"Your POS account has no website access role ({VIEWER_ROLE} or "
                           f"{MANAGER_ROLE}). Ask a manager to add one.")
         if self.restricted and role != "manager":
-            raise Refused(f"{self.name} needs the {MANAGER_ROLE} role in the POS; your account "
+            what = "changes the website and needs" if self.write else "needs"
+            raise Refused(f"{self.name} {what} the {MANAGER_ROLE} role in the POS; your account "
                           f"has {VIEWER_ROLE}. Ask a manager.")
         if self.input_mode == NO_INPUT:
             value = None
         elif self.input_mode == WRAPPED_INPUT:
             value = arguments.get("input")
+        elif self.method == "POST":
+            # A JSON body carries an empty object as it is.
+            value = arguments
         else:
             value = arguments or self.empty_input
         try:
-            return self.fn(self.ability, value)
+            return self.fn(self.ability, value, self.method)
         except SiteError as e:
             # A query string cannot carry an empty object, so WordPress validates a
             # missing input against an object schema without a top-level default and
@@ -362,16 +432,17 @@ class SiteTool(Tool):
             # WP_Ability::normalize_input / validate_input). No encoding gets an empty
             # array to the ability over GET, so tell the client to pass arguments. The
             # code alone is matched: the message is translated.
-            if (not arguments and self.input_mode == OBJECT_INPUT and e.status == 400
-                    and e.code == "ability_invalid_input"):
+            if (not arguments and self.input_mode == OBJECT_INPUT and self.method != "POST"
+                    and e.status == 400 and e.code == "ability_invalid_input"):
                 raise _empty_call_refusal(self.name, self.parameters, e) from None
             raise
 
     async def run(self, arguments: dict[str, Any], context=None, convert_result: bool = False) -> Any:
         from .server import _audited
 
+        # A write's record names its target, not the text or personal data it writes.
         call = functools.partial(_audited, lambda **kw: self._invoke(kw), self.name, WEB_SURFACE,
-                                 (), arguments)
+                                 (), arguments, audit_record(arguments) if self.write else None)
         try:
             text = await anyio.to_thread.run_sync(call)
         except Exception as e:
@@ -379,29 +450,80 @@ class SiteTool(Tool):
         return [TextContent(type="text", text=text)] if convert_result else text
 
 
-def make_tool(site: Site, ability: str, meta: dict, restricted: bool) -> SiteTool | None:
-    """The tool for one listed ability, or None (logged) when the site does not
-    mark it read-only. Only `readonly: true` passes; missing, null or anything else
-    is refused."""
+def make_tool(site: Site, ability: str, meta: dict, kind: str = READ) -> SiteTool | None:
+    """The tool for one listed ability, or None (logged). A read must be marked
+    read-only by the site: only `readonly: true` passes; missing, null or anything
+    else is refused. A write is listed as one on purpose; the site's annotations only
+    choose the HTTP method WordPress expects."""
     block = meta.get("meta")
     annotations = block.get("annotations") if isinstance(block, dict) else None
-    if meta.get("name") != ability or not isinstance(annotations, dict) or annotations.get("readonly") is not True:
+    write = kind == WRITE
+    if meta.get("name") != ability:
+        logger.warning("web bridge: SKIPPED %s: the website answered for another ability.", ability)
+        return None
+    if not write and (not isinstance(annotations, dict) or annotations.get("readonly") is not True):
         logger.warning("web bridge: SKIPPED %s: the website does not mark it read-only.", ability)
         return None
+    annotations = annotations if isinstance(annotations, dict) else {}
     schema, mode = _input_schema(ability, meta.get("input_schema"))
     label = str(meta.get("label") or "") or None
     description = str(meta.get("description") or label or ability)
-    if restricted:
+    if write:
+        if ability in WRITE_NOTES:
+            description += f"\n\n{WRITE_NOTES[ability]}"
+        description += f"\n\nChanges the website. Needs the {MANAGER_ROLE} role in the POS."
+    elif kind == RESTRICTED:
         description += f"\n\nNeeds the {MANAGER_ROLE} role in the POS."
+    method = http_method(annotations) if write else "GET"
     return SiteTool(
         fn=site.run, name=tool_name(ability), title=label,
         description=description, parameters=schema, fn_metadata=_PLACEHOLDER_META,
         is_async=True, context_kwarg=None,
-        annotations=ToolAnnotations(title=label, readOnlyHint=True,
-                                    destructiveHint=False,
+        annotations=ToolAnnotations(title=label, readOnlyHint=not write,
+                                    destructiveHint=write and (
+                                        any(w in ability for w in _DESTRUCTIVE_WORDS)
+                                        or annotations.get("destructive") is True),
                                     idempotentHint=annotations.get("idempotent") is True),
-        ability=ability, restricted=restricted, input_mode=mode,
-        empty_input=_empty_input(meta.get("input_schema")) if mode == OBJECT_INPUT else None)
+        ability=ability, restricted=kind != READ, write=write, method=method, input_mode=mode,
+        empty_input=_empty_input(meta.get("input_schema")) if mode == OBJECT_INPUT and method != "POST"
+        else None)
+
+
+# A write's audit record: these keys are kept as given (what the change targets, and
+# the segment or status change itself); an email is shortened; a map keeps its key
+# names (which fields changed, not to what); any other text or list keeps its size only.
+_AUDIT_KEEP = frozenset({"id", "ids", "contact_id", "contact_ids", "order_id", "post_id", "product_id",
+                         "type", "status", "contact_type", "if_exists", "dry_run",
+                         "add_tags", "remove_tags", "add_lists", "remove_lists"})
+_AUDIT_EMAIL = frozenset({"email", "new_email"})
+# lazy: 50 bulk items listed per record; the POS cuts a record over 4000 characters anyway.
+_AUDIT_ITEMS = 50
+
+
+def _audit_value(key: str, value: Any) -> Any:
+    if key in _AUDIT_EMAIL and isinstance(value, str):
+        local, at, domain = value.partition("@")
+        return f"{local[:1]}***@{domain}" if at else "***"
+    if isinstance(value, dict):
+        return sorted(value)
+    if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+        out: list = [audit_record(v) for v in value[:_AUDIT_ITEMS]]
+        return out + [f"... {len(value) - _AUDIT_ITEMS} more"] if len(value) > _AUDIT_ITEMS else out
+    if key in _AUDIT_KEEP:
+        return value
+    if isinstance(value, list):
+        return f"<{len(value)} items>"
+    if isinstance(value, str):
+        return f"<{len(value)} characters>"
+    return value
+
+
+def audit_record(arguments: Any) -> Any:
+    """What a write's Connector Audit Log row keeps of its arguments: who and what it
+    targets, without the text or personal data it writes."""
+    if not isinstance(arguments, dict):
+        return {"input": _audit_value("input", arguments)}
+    return {k: _audit_value(str(k), v) for k, v in arguments.items()}
 
 
 class Catalog:
@@ -409,7 +531,7 @@ class Catalog:
     that pass the read-only gate. An ability the site answers for (or definitively
     lacks) is settled; one it could not answer for stays pending and is retried."""
 
-    def __init__(self, mcp, site: Site, abilities: dict[str, bool]) -> None:
+    def __init__(self, mcp, site: Site, abilities: dict[str, str]) -> None:
         self.mcp, self.site = mcp, site
         self.pending = dict(abilities)
 
@@ -420,7 +542,7 @@ class Catalog:
         manager._tools = {**manager._tools, tool.name: tool}
 
     def load_once(self) -> None:
-        for ability, restricted in list(self.pending.items()):
+        for ability, kind in list(self.pending.items()):
             try:
                 meta = self.site.describe(ability)
             except SiteError as e:
@@ -438,7 +560,7 @@ class Catalog:
             if meta is None:
                 logger.warning("web bridge: SKIPPED %s: the website does not offer it.", ability)
                 continue
-            tool = make_tool(self.site, ability, meta, restricted)
+            tool = make_tool(self.site, ability, meta, kind)
             if tool:
                 self._add(tool)
         names = sorted(t.name for t in self.mcp._tool_manager.list_tools())
@@ -455,7 +577,7 @@ class Catalog:
 
 
 def register(mcp) -> Catalog:
-    """Register the configured site's read-only abilities on `mcp`."""
+    """Register the configured site's abilities on `mcp`."""
     cfg = load_config()
     catalog = Catalog(mcp, Site(cfg), cfg.abilities)
     catalog.load_once()

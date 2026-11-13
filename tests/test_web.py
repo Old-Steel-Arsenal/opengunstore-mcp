@@ -112,6 +112,17 @@ class FakeWP:
 				return 404, {"code": "rest_ability_not_found", "message": "Ability not found."}, 0
 			if self.run_reply:
 				return self.run_reply
+			query = parse_qsl(parts.query, keep_blank_values=True)
+			schema = self.abilities[name]["input_schema"]
+			# WordPress 7.0's rule for a run without input (GET reads only ?input[...]):
+			# WP_Ability::normalize_input (abilities-api/class-wp-ability.php) falls back
+			# to the schema's top-level default only; validate_input then checks null
+			# against the schema, and rest_validate_object_value_from_schema
+			# (rest-api.php) refuses null for type object. The run controller answers 400.
+			if (not any(k == "input" or k.startswith("input[") for k, _ in query)
+					and schema and schema.get("type") == "object" and "default" not in schema):
+				return 400, {"code": "ability_invalid_input", "message": f'Ability "{name}" has '
+					"invalid input. Reason: input is not of type object.", "data": {"status": 400}}, 0
 			return 200, {"ran": name, "query": parse_qsl(parts.query, keep_blank_values=True)}, 0
 		if rest not in self.abilities:
 			return 404, {"code": "rest_ability_not_found", "message": "Ability not found."}, 0
@@ -376,7 +387,45 @@ class Bridge(_Fresh, unittest.TestCase):
 		err, text = self._call(c, "T-VIEW", "woocommerce_products_query", {"search": "x"})
 		self.assertEqual(json.loads(text)["query"], [["input[search]", "x"]], "given arguments go as given")
 		err, text = self._call(c, "T-VIEW", "example_bare_object")
-		self.assertEqual(json.loads(text)["query"], [], "no defaults to send: the site decides")
+		self.assertTrue(err, "no defaults to send: the site refuses the empty call")
+		self.assertEqual(self.wp.runs()[-1].split("?")[1:], [], "and nothing was invented to send")
+
+	def test_an_empty_call_the_site_refuses_names_the_parameters_to_pass(self):
+		schema = {"type": "object", "properties": {"search": {"type": "string"},
+			"limit": {"type": "integer"}, "category": {"type": "string", "required": True}}}
+		self.wp.abilities[PRODUCTS] = _ability(PRODUCTS, schema=schema)
+		c = self._client(restricted=(), plain=(ORDERS, PRODUCTS))
+		err, text = self._call(c, "T-VIEW", "woocommerce_products_query")
+		self.assertTrue(err)
+		expected = ("woocommerce_products_query cannot be called without arguments. Call it again "
+			"with at least one of its parameters: search, limit, category (required). The website "
+			'said: Ability "woocommerce/products-query" has invalid input. Reason: input is not '
+			"of type object.")
+		self.assertIn(expected, text)
+		self.assertEqual([e["phase"] for _, e in self.pos.audits[-2:]], ["started", "failed"])
+		self.assertIn(expected, self.pos.audits[-1][1]["error"])
+		err, text = self._call(c, "T-VIEW", "woocommerce_products_query", {"category": "x"})
+		self.assertFalse(err, text)
+
+	def test_an_empty_call_to_a_tool_without_parameters_says_the_site_will_not_take_it(self):
+		bare = "fluent-crm/get-contact-filter-schema"
+		self.wp.abilities[bare] = _ability(bare, schema={"type": "object", "properties": {}})
+		c = self._client(restricted=(), plain=(ORDERS, bare))
+		err, text = self._call(c, "T-VIEW", "fluent_crm_get_contact_filter_schema")
+		self.assertTrue(err)
+		self.assertIn("The website does not accept an empty call to fluent_crm_get_contact_filter_schema "
+			"over this connector, and the tool has no parameters to pass instead. Ask an administrator "
+			"to give the ability's input a default on the website.", text)
+		self.assertEqual(self.pos.audits[-1][1]["phase"], "failed")
+
+	def test_a_call_with_arguments_keeps_the_plain_mapping_for_invalid_input(self):
+		self.wp.run_reply = (400, {"code": "ability_invalid_input", "message": "Ability \"x\" has "
+			"invalid input. Reason: input[per_page] is not of type integer."}, 0)
+		c = self._client()
+		err, text = self._call(c, "T-VIEW", "woocommerce_orders_query", {"per_page": "many"})
+		self.assertTrue(err)
+		self.assertIn("did not accept the request", text)
+		self.assertNotIn("cannot be called without arguments", text)
 
 	def test_restricted_abilities_need_manager(self):
 		c = self._client()
@@ -421,7 +470,8 @@ class Bridge(_Fresh, unittest.TestCase):
 		c = self._client()
 		for reply, expected in cases:
 			self.wp.run_reply = reply
-			err, text = self._call(c, "T-VIEW", "woocommerce_orders_query")
+			# With arguments: an empty call's 400 has its own refusal (tested below).
+			err, text = self._call(c, "T-VIEW", "woocommerce_orders_query", {"per_page": 5})
 			self.assertTrue(err, reply)
 			self.assertIn(expected, text, reply)
 			self.assertEqual(self.pos.audits[-1][1]["phase"], "failed")

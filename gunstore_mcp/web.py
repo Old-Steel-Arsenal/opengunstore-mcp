@@ -124,7 +124,12 @@ def load_config() -> WebConfig:
 
 
 class SiteError(RuntimeError):
-    """A call to the site failed; the message is safe to show the user."""
+    """A call to the site failed; the message is safe to show the user. `status`,
+    `code` and `said` are the site's HTTP status, WordPress error code and message."""
+
+    def __init__(self, message: str, status: int = 0, code: str = "", said: str = "") -> None:
+        super().__init__(message)
+        self.status, self.code, self.said = status, code, said
 
 
 class Refused(RuntimeError):
@@ -194,6 +199,12 @@ class Site:
         return str(body.get("code") or ""), self.scrub(msg.strip())[:500]
 
     def _error(self, ability: str, resp: requests.Response) -> SiteError:
+        error = self._describe_error(ability, resp)
+        error.status = resp.status_code
+        error.code, error.said = self._message(resp)
+        return error
+
+    def _describe_error(self, ability: str, resp: requests.Response) -> SiteError:
         status = resp.status_code
         code, msg = self._message(resp)
         said = f" The website said: {msg}" if msg else ""
@@ -299,6 +310,23 @@ def _empty_input(raw: Any) -> dict | None:
     return defaults or None
 
 
+def _empty_call_refusal(tool: str, schema: dict, site_error: SiteError) -> SiteError:
+    """The refusal for a call made without arguments that the site would not take
+    (see SiteTool._invoke): name the parameters so the client retries with some."""
+    props = schema.get("properties")
+    names = list(props) if isinstance(props, dict) else []
+    required = set(schema.get("required") or [])
+    said = f" The website said: {site_error.said}" if site_error.said else ""
+    if not names:
+        return SiteError(f"The website does not accept an empty call to {tool} over this "
+                         "connector, and the tool has no parameters to pass instead. Ask an "
+                         "administrator to give the ability's input a default on the website."
+                         + said)
+    listed = ", ".join(f"{n} (required)" if n in required else n for n in names)
+    return SiteError(f"{tool} cannot be called without arguments. Call it again with at least "
+                     f"one of its parameters: {listed}.{said}")
+
+
 class SiteTool(Tool):
     """One site ability as one MCP tool. `fn(input)` calls the site; run() adds the
     role check and the audit record around it, in a worker thread."""
@@ -325,7 +353,19 @@ class SiteTool(Tool):
             value = arguments.get("input")
         else:
             value = arguments or self.empty_input
-        return self.fn(self.ability, value)
+        try:
+            return self.fn(self.ability, value)
+        except SiteError as e:
+            # A query string cannot carry an empty object, so WordPress validates a
+            # missing input against an object schema without a top-level default and
+            # refuses it with 400 ability_invalid_input ("input is not of type object";
+            # WP_Ability::normalize_input / validate_input). No encoding gets an empty
+            # array to the ability over GET, so tell the client to pass arguments. The
+            # code alone is matched: the message is translated.
+            if (not arguments and self.input_mode == OBJECT_INPUT and e.status == 400
+                    and e.code == "ability_invalid_input"):
+                raise _empty_call_refusal(self.name, self.parameters, e) from None
+            raise
 
     async def run(self, arguments: dict[str, Any], context=None, convert_result: bool = False) -> Any:
         from .server import _audited

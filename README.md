@@ -343,7 +343,10 @@ connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
   `woocommerce_orders_query`), with the site's description and input schema, marked
   `readOnlyHint`. A call without arguments sends the schema's declared property
   defaults when it has no top-level default (a GET query cannot carry an empty
-  object, and WordPress refuses a missing one).
+  object, and WordPress refuses a missing one). With no defaults either, the site
+  refuses the empty call and the tool answers by naming its parameters so the client
+  retries with some; an ability that takes no parameters needs a top-level `default`
+  in its input schema on the site to be callable over GET.
 - **Who may call what**: the POS reports each user's website role
   (`connector_identity` → `web_access`: `viewer`, `manager` or none). No role: every
   call is refused. Abilities in `WEB_ABILITIES_RESTRICTED` (e.g. contact-level data)

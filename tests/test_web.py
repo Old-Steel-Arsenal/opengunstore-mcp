@@ -92,6 +92,7 @@ class FakeWP:
 	def __init__(self, abilities):
 		self.abilities = {a["name"]: a for a in abilities}
 		self.down = False
+		self.forbidden = set()  # abilities whose metadata answers 403
 		self.run_reply = None  # (status, payload, delay) overriding the default echo
 		self.server = _Server(self.handle)
 
@@ -126,6 +127,8 @@ class FakeWP:
 			return 200, {"ran": name, "query": parse_qsl(parts.query, keep_blank_values=True)}, 0
 		if rest not in self.abilities:
 			return 404, {"code": "rest_ability_not_found", "message": "Ability not found."}, 0
+		if rest in self.forbidden:
+			return 403, {"code": "rest_forbidden", "message": "Sorry, you are not allowed."}, 0
 		return 200, self.abilities[rest], 0
 
 	def runs(self):
@@ -544,6 +547,44 @@ class Startup(_Fresh, unittest.TestCase):
 				time.sleep(0.02)
 		self.assertEqual({t.name for t in mcp._tool_manager.list_tools()},
 			{"woocommerce_orders_query", "woocommerce_products_query"})
+
+
+	def test_one_ability_the_site_refuses_does_not_hold_back_the_others(self):
+		wp = FakeWP([_ability(ORDERS), _ability(PRODUCTS), _ability("woocommerce/customers-query")])
+		self.addCleanup(wp.server.close)
+		wp.forbidden = {ORDERS}  # listed first
+		mcp = FastMCP("t")
+		with _env(None, wp.server.url, plain=[ORDERS, PRODUCTS, "woocommerce/customers-query"]), \
+				self.assertLogs("gunstore_mcp.web", "WARNING") as logs:
+			catalog = web.Catalog(mcp, web.Site(web.load_config()), web.load_config().abilities)
+			catalog.load_once()
+		self.assertEqual({t.name for t in mcp._tool_manager.list_tools()},
+			{"woocommerce_products_query", "woocommerce_customers_query"})
+		self.assertEqual(list(catalog.pending), [ORDERS], "kept pending: it may recover")
+		out = "\n".join(logs.output)
+		self.assertIn(f"could not load {ORDERS} (HTTP 403", out)
+		self.assertIn("ready, %d tool(s)" % 2, out)  # not a literal: the doc-count guard reads prose
+		self.assertIn(f"1 ability(ies) still pending: {ORDERS}", out)
+		wp.forbidden = set()
+		with self.assertLogs("gunstore_mcp.web", "WARNING"):
+			catalog.load_once()
+		self.assertEqual(catalog.pending, {})
+		self.assertEqual(len(mcp._tool_manager.list_tools()), 3)
+
+	def test_a_site_that_does_not_answer_stops_the_pass(self):
+		mcp = FastMCP("t")
+		with _env(None, "http://127.0.0.1:9", plain=[ORDERS, PRODUCTS]), \
+				self.assertLogs("gunstore_mcp.web", "WARNING") as logs:
+			catalog = web.Catalog(mcp, web.Site(web.load_config()), web.load_config().abilities)
+			calls = []
+			real = catalog.site.describe
+			catalog.site.describe = lambda a: (calls.append(a), real(a))[1]
+			catalog.load_once()
+		self.assertEqual(calls, [ORDERS], "the pass stops at the first unanswered call")
+		self.assertEqual(set(catalog.pending), {ORDERS, PRODUCTS})
+		out = "\n".join(logs.output)
+		self.assertIn("will retry", out)
+		self.assertNotIn("ready", out)
 
 
 class Verifier(unittest.TestCase):

@@ -424,8 +424,16 @@ class Catalog:
             try:
                 meta = self.site.describe(ability)
             except SiteError as e:
-                logger.warning("web bridge: could not load the website's abilities (%s); will retry.", e)
-                return  # the site is likely down: leave the rest for the next attempt
+                if not e.status:
+                    # No answer at all (down, timeout, not JSON): leave the rest for the next attempt.
+                    logger.warning("web bridge: could not load the website's abilities (%s); "
+                                   "will retry.", e)
+                    return
+                # The site answered, with an error for this one ability: it stays pending (it may
+                # recover) without holding back the abilities listed after it.
+                logger.warning("web bridge: could not load %s (HTTP %s: %s); will retry.",
+                               ability, e.status, e)
+                continue
             del self.pending[ability]
             if meta is None:
                 logger.warning("web bridge: SKIPPED %s: the website does not offer it.", ability)
@@ -433,9 +441,10 @@ class Catalog:
             tool = make_tool(self.site, ability, meta, restricted)
             if tool:
                 self._add(tool)
-        if not self.pending:
-            names = sorted(t.name for t in self.mcp._tool_manager.list_tools())
-            logger.warning("web bridge: ready, %d tool(s): %s", len(names), ", ".join(names) or "none")
+        names = sorted(t.name for t in self.mcp._tool_manager.list_tools())
+        logger.warning("web bridge: ready, %d tool(s): %s%s", len(names), ", ".join(names) or "none",
+                       f"; {len(self.pending)} ability(ies) still pending: "
+                       f"{', '.join(sorted(self.pending))}" if self.pending else "")
 
     def retry_until_loaded(self) -> None:
         delay = RETRY_FIRST

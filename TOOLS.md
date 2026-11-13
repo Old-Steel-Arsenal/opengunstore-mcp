@@ -16,6 +16,10 @@ the authority on exact signatures.
 3. **Credentials never travel through this MCP.** Password and API-key fields are stripped
    on write and are never returned on read. Change secrets in the POS Desk (My Settings,
    or the relevant Settings page).
+4. **One server is one store.** Each store's POS runs its own server, and they all carry
+   the same tool names. The server's instructions name its POS host, and so does every
+   `confirm` refusal (`'ship_order' on pos.example.com is destructive…`). With more than
+   one store connected, check that host before a write.
 
 Every Woo-related tool takes an optional `site` argument; the only value is `retail`
 (the default). The separate dealer storefront was retired with POS 1.11.0.
@@ -557,4 +561,4 @@ tie-out, run `frappe_run_report("Stock Balance", ...)`.
 
 ---
 
-*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.14.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.14.1; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 import time
 
-from .config import get_config
+from .config import get_config, store_host
 from .frappe_client import get_client
 
 # Name-based credential backstop — applied to EVERY key at every nesting level,
@@ -242,9 +242,10 @@ def check_method_call_writable(method: str, kwargs: dict | None) -> None:
 
 def require_confirm(action: str, confirm: bool) -> None:
     if not confirm:
+        store = store_host()
         raise WriteRefused(
-            f"Refused: '{action}' is destructive/consequential. "
-            "Re-call with confirm=true to proceed."
+            f"Refused: '{action}'{f' on {store}' if store else ''} is "
+            "destructive/consequential. Re-call with confirm=true to proceed."
         )
 
 

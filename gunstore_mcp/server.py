@@ -32,7 +32,7 @@ from starlette.routing import Route
 
 from . import __version__, audit
 from .auth import FrappeTokenVerifier
-from .config import HTTP, get_config, get_transport
+from .config import HTTP, get_config, get_transport, store_host
 from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, FilteredMCP, get_mode
 from .tools import (crm, compliance, curated, customers, distributor, generic, hr, orders, range_board,
                     reports, services, shopfloor)
@@ -150,11 +150,24 @@ def _http_settings() -> dict:
     }
 
 
+def _instructions() -> str | None:
+    """What the model is told about this server: which store it is. Clients show
+    several stores' connectors side by side, all with the same tool names."""
+    store = store_host()
+    if not store:
+        return None
+    return (f"This server reads and writes ONE store's OpenGunstore POS: {store}. Every "
+            "other store has its own server with the same tool names. Before calling a "
+            "tool here, check the task is for this store; when reporting what was done, "
+            "name the store.")
+
+
 def build() -> FastMCP:
     mode = get_mode()
     remote = get_transport() == HTTP
     kwargs = _http_settings() if remote else {}
-    mcp = FastMCP("gunstore-pos" if mode == FULL_MODE else "gunstore-pos-cpa", **kwargs)
+    mcp = FastMCP("gunstore-pos" if mode == FULL_MODE else "gunstore-pos-cpa",
+                  instructions=_instructions(), **kwargs)
     # FastMCP takes no version; without this serverInfo reports the mcp SDK's
     # version, so clients can't tell which build of ours they're talking to.
     mcp._mcp_server.version = __version__

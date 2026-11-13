@@ -459,5 +459,36 @@ class Healthcheck(unittest.TestCase):
 			self.assertEqual(self._run(codes)[0], 1, codes)
 
 
+class StoreIdentity(_Fresh, unittest.TestCase):
+	"""Every store's server carries the same tool names; the POS host is what
+	tells two connected stores apart."""
+
+	def test_the_remote_server_tells_the_model_which_store_it_is(self):
+		from gunstore_mcp import server
+		with _env({**HTTP_ENV, "GUNSTORE_MCP_MODE": "cpa"}):
+			self.assertIn("pos.example.com", server.build().instructions)
+
+	def test_the_local_server_names_its_site_too(self):
+		from gunstore_mcp import server
+		with _env({"FRAPPE_BASE_URL": "http://dev.localhost:8000/"}):
+			self.assertIn("dev.localhost:8000", server.build().instructions)
+
+	def test_no_site_configured_means_no_instructions(self):
+		from gunstore_mcp import server
+		with _env():
+			self.assertIsNone(server.build().instructions)
+
+	def test_a_confirm_refusal_names_the_store(self):
+		from gunstore_mcp import safety
+		with _env(HTTP_ENV), self.assertRaises(safety.WriteRefused) as e:
+			safety.require_confirm("ship_order", False)
+		self.assertIn("'ship_order' on pos.example.com is destructive", str(e.exception))
+		with _env(), self.assertRaises(safety.WriteRefused) as e:
+			safety.require_confirm("ship_order", False)
+		self.assertIn("'ship_order' is destructive", str(e.exception))
+		with _env(HTTP_ENV):
+			safety.require_confirm("ship_order", True)
+
+
 if __name__ == "__main__":
 	unittest.main()

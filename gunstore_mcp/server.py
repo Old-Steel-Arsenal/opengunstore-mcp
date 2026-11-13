@@ -11,7 +11,8 @@ the POS (auth.FrappeTokenVerifier) and forwarded on every call.
 Modes (GUNSTORE_MCP_MODE): "full" (default) = the whole surface; "cpa" = the
 read-only accountant surface (exactly the tools in modes.CPA_TOOL_NAMES; the
 write tools are never registered); "web" = the WordPress abilities bridge (web.py:
-a site's read-only abilities, no POS tools, remote only).
+a site's abilities, read and, where the deployment lists them, write; no POS
+tools; remote only).
 
 GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1 additionally opts into the 4 distributor queue
 actions, which are NOT registered otherwise. Sizes are asserted in tests rather
@@ -39,9 +40,10 @@ from .tools import (crm, compliance, curated, customers, distributor, generic, h
                     reports, services, shopfloor)
 
 
-def _audited(fn, name: str, surface: str, args: tuple, kwargs: dict):
-    """Run one tool call inside its audit record (see audit.py)."""
-    log = audit.start(name, surface, kwargs)
+def _audited(fn, name: str, surface: str, args: tuple, kwargs: dict, record: dict | None = None):
+    """Run one tool call inside its audit record (see audit.py). `record`, when
+    given, is what the record keeps of the arguments instead of the arguments."""
+    log = audit.start(name, surface, kwargs if record is None else record)
     try:
         result = fn(*args, **kwargs)
     except Exception as e:
@@ -155,13 +157,21 @@ def _instructions(mode: str) -> str | None:
     """What the model is told about this server: which store it is. Clients show
     several stores' connectors side by side, all with the same tool names."""
     if mode == WEB_MODE:
-        from .web import SITE_URL
+        from .web import SITE_URL, writes_listed
         # WEB_SITE_URL is required in this mode (web.load_config refuses to start without it).
-        return (f"This server reads ONE store's website: {store_host(SITE_URL)}. It is "
-                "read-only: it cannot change the site, and it has no POS tools. Every other "
-                "store has its own server with the same tool names. Before calling a tool "
-                "here, check the task is for this website; when reporting what you found, "
-                "name the site.")
+        if not writes_listed():
+            return (f"This server reads ONE store's website: {store_host(SITE_URL)}. It is "
+                    "read-only: it cannot change the site, and it has no POS tools. Every other "
+                    "store has its own server with the same tool names. Before calling a tool "
+                    "here, check the task is for this website; when reporting what you found, "
+                    "name the site.")
+        return (f"This server works on ONE store's website: {store_host(SITE_URL)}. It has no "
+                "POS tools. Its read tools work for every user with website access; its write "
+                "tools (each says \"Changes the website\") work only for a Website Connector "
+                "Manager and change the live site. Before a write, tell the user exactly what "
+                "will change and wait for a yes. Every other store has its own server with the "
+                "same tool names. Before calling a tool here, check the task is for this "
+                "website; when reporting what you found or changed, name the site.")
     store = store_host()
     if not store:
         return None
@@ -173,7 +183,7 @@ def _instructions(mode: str) -> str | None:
 
 # mode -> the POS connector surface it verifies tokens and audits calls under.
 SURFACE = {FULL_MODE: FULL_MODE, CPA_MODE: CPA_MODE, WEB_MODE: WEB_SURFACE}
-SERVER_NAMES = {FULL_MODE: "gunstore-pos", CPA_MODE: "gunstore-pos-cpa", WEB_MODE: "gunstore-web-ro"}
+SERVER_NAMES = {FULL_MODE: "gunstore-pos", CPA_MODE: "gunstore-pos-cpa", WEB_MODE: "gunstore-web"}
 
 
 def build() -> FastMCP:

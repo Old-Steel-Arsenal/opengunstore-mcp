@@ -321,47 +321,68 @@ so an assistant with two stores connected can check before it writes.
   *Enable Dynamic Client Registration* on; *Skip Authorization* off (every user
   approves). Revoke a user's access in Desk under OAuth Bearer Token.
 
-## Website connector (WordPress abilities bridge, read-only)
+## Website connector (WordPress abilities bridge)
 
-`GUNSTORE_MCP_MODE=web` turns the remote server into a read-only connector for the
-store's WordPress site: people sign in with their POS account exactly as above, and
-the server calls the site's [Abilities API](https://developer.wordpress.org/apis/abilities/)
-on their behalf. It registers no POS tools. Server name `gunstore-web-ro`; POS
-connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
+`GUNSTORE_MCP_MODE=web` turns the remote server into a connector for the store's
+WordPress site: people sign in with their POS account exactly as above, and the server
+calls the site's [Abilities API](https://developer.wordpress.org/apis/abilities/) on
+their behalf. It registers no POS tools. Server name `gunstore-web`; POS connector
+surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`; the key predates
+writes and is kept so no deployment has to move).
 
 - **The site is called as one service account** (a WordPress user with an
   application password, HTTP Basic), through core's REST routes:
-  `GET /wp-json/wp-abilities/v1/abilities/<name>` for the schema at start, and
-  `GET …/<name>/run?input[...]=…` per call. Every call is a GET, which WordPress
-  itself refuses for an ability that is not read-only.
-- **Two gates, both must pass, failing closed**: an ability becomes a tool only if
-  it is in this deployment's list **and** the site's metadata says
-  `annotations.readonly: true`. Anything else (a write, missing or non-boolean
-  annotation, not on the site) is skipped and named in the startup log. Lists are
-  deployment configuration; the code names no ability.
+  `GET /wp-json/wp-abilities/v1/abilities/<name>` for the schema at start, then per call
+  `…/<name>/run` with the method WordPress requires for that ability
+  (`WP_REST_Abilities_V1_Run_Controller::validate_request_method`): `GET` with
+  `?input[...]=` for a read-only ability, `DELETE` with the same query input for one
+  marked both destructive and idempotent, `POST` with a JSON body `{"input": …}` for
+  any other. Nothing is retried.
+- **Reads: two gates, both must pass, failing closed**: an ability in
+  `WEB_ABILITIES` or `WEB_ABILITIES_RESTRICTED` becomes a tool only if the site's
+  metadata also says `annotations.readonly: true`. Anything else is skipped and named
+  in the startup log.
+- **Writes are opt-in**: exactly the abilities listed in `WEB_ABILITIES_WRITE` (empty
+  or unset: the connector is read-only and lists the same tools, with the same
+  instructions, as before writes existed). A listed write is bridged whatever the
+  site's annotations say; they only choose the HTTP method. Lists are deployment
+  configuration.
 - **One tool per ability**, named mechanically (`woocommerce/orders-query` →
-  `woocommerce_orders_query`), with the site's description and input schema, marked
-  `readOnlyHint`. A call without arguments sends the schema's declared property
-  defaults when it has no top-level default (a GET query cannot carry an empty
-  object, and WordPress refuses a missing one). With no defaults either, the site
-  refuses the empty call and the tool answers by naming its parameters so the client
-  retries with some; an ability that takes no parameters needs a top-level `default`
-  in its input schema on the site to be callable over GET.
-- **It says which site it reads**: the server's instructions name the host of
-  `WEB_SITE_URL` and say it is read-only, so with several stores' connectors side by
-  side the model can tell them apart. There are no write tools, so no `confirm`
-  refusals either.
+  `woocommerce_orders_query`), with the site's description and input schema. Reads
+  are marked `readOnlyHint`; writes `readOnlyHint: false`, and `destructiveHint`
+  when the name contains `delete`, `update-status`, `change-campaign-status`, `send`
+  or `bulk`, or the site marks the ability destructive (a hint for the client's
+  confirmation prompt, not a gate). A write's description ends "Changes the website.
+  Needs the Website Connector Manager role in the POS." `woocommerce/order-add-note`
+  also says that a note with `customer_note: true` is emailed to the customer.
+- A read called without arguments sends the schema's declared property defaults when
+  it has no top-level default (a GET query cannot carry an empty object, and
+  WordPress refuses a missing one). With no defaults either, the site refuses the
+  empty call and the tool answers by naming its parameters so the client retries with
+  some; an ability that takes no parameters needs a top-level `default` in its input
+  schema on the site to be callable over GET. A `POST` write without arguments sends
+  `{"input": {}}`.
+- **It says which site it works on**: the server's instructions name the host of
+  `WEB_SITE_URL`; read-only when no write is listed, otherwise they say which tools
+  change the live site, who may call them, and to confirm with the user first.
 - **Who may call what**: the POS reports each user's website role
   (`connector_identity` → `web_access`: `viewer`, `manager` or none). No role: every
   call is refused. Abilities in `WEB_ABILITIES_RESTRICTED` (e.g. contact-level data)
-  run only for `manager`; a viewer gets a plain refusal, not a sign-in prompt.
+  and every write run only for `manager`; a viewer gets a plain refusal, not a
+  sign-in prompt.
 - **Audited like every connector call**: the Connector Audit Log row (surface
   `web_ro`) is written before the site is called; if it cannot be, the site is not
-  called. A call refused for the user's website role is recorded as failed.
+  called. A call refused for the user's website role is recorded as failed. A
+  write's row keeps what it targets, not what it writes: ids, tag and list changes,
+  statuses and flags as given; an email as `j***@example.com`; a map (`fields`,
+  `custom_fields`) as its key names; any other text or list as its size only
+  (`"<29 characters>"`). Reads keep their arguments.
 - **Errors in plain words**: the site rejecting the service account (401), the account
   lacking a capability (403), an ability gone (404), input refused (4xx), site errors
-  (5xx), timeouts (30 s) and non-JSON pages each get one sentence. The application
-  password never appears in logs, the audit trail, results or errors.
+  (5xx), timeouts (30 s) and non-JSON pages each get one sentence. A write that
+  times out, loses its connection or gets a 5xx says the change may or may not have
+  been made and to check the site before trying again. The application password
+  never appears in logs, the audit trail, results or errors.
 - **Results over 150,000 characters are cut** with a note to use the ability's paging
   or filter parameters.
 - **Site down at start**: the server starts anyway and retries loading the abilities
@@ -370,8 +391,11 @@ connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
 - Env, on top of the remote connector's (`GUNSTORE_MCP_TRANSPORT=http` is required;
   stdio refuses to start): `WEB_SITE_URL` (https; plain http only for localhost),
   `WEB_SITE_USER`, `WEB_SITE_APP_PASSWORD`, and `WEB_ABILITIES` /
-  `WEB_ABILITIES_RESTRICTED` (comma-separated ability names; at least one). A missing
-  or malformed setting refuses to start and says which.
+  `WEB_ABILITIES_RESTRICTED` / `WEB_ABILITIES_WRITE` (comma-separated ability names;
+  at least one in all; an ability in two lists refuses to start). A missing or
+  malformed setting refuses to start and says which. The service account needs the
+  site capabilities each listed ability checks; a missing one shows as a 403 on that
+  tool.
 
 ## Security notes
 

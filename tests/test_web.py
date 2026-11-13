@@ -99,9 +99,9 @@ class FakeWP:
 	def handle(self, method, path, headers, body):
 		if self.down:
 			return 503, b"<html>maintenance</html>", 0
-		if method != "GET":
-			return 405, {"code": "stub", "message": "the bridge sent a non-GET request"}, 0
 		parts = urlparse(path)
+		if method != "GET" and not parts.path.endswith("/run"):
+			return 405, {"code": "stub", "message": "metadata is read with GET"}, 0
 		if not parts.path.startswith(API):
 			return 404, {"code": "rest_no_route", "message": "No route"}, 0
 		rest = unquote(parts.path[len(API):])
@@ -111,8 +111,17 @@ class FakeWP:
 			name = rest[:-4]
 			if name not in self.abilities:
 				return 404, {"code": "rest_ability_not_found", "message": "Ability not found."}, 0
+			# WordPress 7.0's run controller: the method must match the annotations
+			# (validate_request_method), and a POST's input is the JSON body's "input".
+			ann = self.abilities[name]["meta"].get("annotations") or {}
+			want = "GET" if ann.get("readonly") else "DELETE" if (ann.get("destructive")
+				and ann.get("idempotent")) else "POST"
+			if method != want:
+				return 405, {"code": "rest_ability_invalid_method", "message": f"{want} required."}, 0
 			if self.run_reply:
 				return self.run_reply
+			if method == "POST":
+				return 200, {"ran": name, "method": method, "body": json.loads(body or "null")}, 0
 			query = parse_qsl(parts.query, keep_blank_values=True)
 			schema = self.abilities[name]["input_schema"]
 			# WordPress 7.0's rule for a run without input (GET reads only ?input[...]):
@@ -124,7 +133,8 @@ class FakeWP:
 					and schema and schema.get("type") == "object" and "default" not in schema):
 				return 400, {"code": "ability_invalid_input", "message": f'Ability "{name}" has '
 					"invalid input. Reason: input is not of type object.", "data": {"status": 400}}, 0
-			return 200, {"ran": name, "query": parse_qsl(parts.query, keep_blank_values=True)}, 0
+			out = {"ran": name, "query": parse_qsl(parts.query, keep_blank_values=True)}
+			return 200, ({**out, "method": method} if method != "GET" else out), 0
 		if rest not in self.abilities:
 			return 404, {"code": "rest_ability_not_found", "message": "Ability not found."}, 0
 		if rest in self.forbidden:
@@ -164,7 +174,7 @@ class FakePOS:
 		return 404, {}, 0
 
 
-def _env(pos, wp_url, plain=(ORDERS,), restricted=(), **extra):
+def _env(pos, wp_url, plain=(ORDERS,), restricted=(), write=None, **extra):
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("GUNSTORE_MCP_", "FRAPPE_", "WEB_"))}
 	env.update({
 		"GUNSTORE_MCP_TRANSPORT": "http", "GUNSTORE_MCP_MODE": "web",
@@ -172,6 +182,8 @@ def _env(pos, wp_url, plain=(ORDERS,), restricted=(), **extra):
 		"GUNSTORE_MCP_PUBLIC_URL": "http://localhost:8790/mcp", "GUNSTORE_MCP_PORT": "8790",
 		"WEB_SITE_URL": wp_url, "WEB_SITE_USER": USER, "WEB_SITE_APP_PASSWORD": PASSWORD,
 		"WEB_ABILITIES": ",".join(plain), "WEB_ABILITIES_RESTRICTED": ",".join(restricted)})
+	if write is not None:
+		env["WEB_ABILITIES_WRITE"] = ",".join(write)
 	env.update(extra)
 	return patch.dict(os.environ, env, clear=True)
 
@@ -294,8 +306,8 @@ class Encoding(unittest.TestCase):
 		self.assertEqual(web._query("input", "abc", []), [("input", "abc")])
 
 
-class Bridge(_Fresh, unittest.TestCase):
-	"""Through the real ASGI app, as a client would call it."""
+class _App(_Fresh):
+	"""A stub site and POS, and the real ASGI app between them."""
 
 	def setUp(self):
 		super().setUp()
@@ -339,11 +351,14 @@ class Bridge(_Fresh, unittest.TestCase):
 		res = self._rpc(c, token, "tools/call", {"name": tool, "arguments": args or {}})["result"]
 		return res["isError"], res["content"][0]["text"]
 
+class Bridge(_App, unittest.TestCase):
+	"""Through the real ASGI app, as a client would call it."""
+
 	def test_server_identity_and_tools(self):
 		from gunstore_mcp import server
 		with _env(self.pos, self.wp.server.url, restricted=[PRODUCTS]):
 			mcp = server.build()
-		self.assertEqual(mcp.name, "gunstore-web-ro")
+		self.assertEqual(mcp.name, "gunstore-web")
 		c = self._client()
 		tools = self._rpc(c, "T-VIEW", "tools/list")["result"]["tools"]
 		self.assertEqual({t["name"] for t in tools}, {"woocommerce_orders_query", "woocommerce_products_query"})
@@ -585,6 +600,255 @@ class Startup(_Fresh, unittest.TestCase):
 		out = "\n".join(logs.output)
 		self.assertIn("will retry", out)
 		self.assertNotIn("ready", out)
+
+
+# A write ability as the site describes it: never readonly (WordPress then wants POST,
+# or DELETE when destructive and idempotent).
+NOTE = "woocommerce/order-add-note"
+SET_META = "example/set-meta"
+DELETE = "woocommerce/product-delete"
+UPSERT = "fluent-crm/upsert-contact"
+NOTE_SCHEMA = {"type": "object", "properties": {"id": {"type": "integer", "minimum": 1},
+	"note": {"type": "string", "minLength": 1}, "customer_note": {"type": "boolean", "default": False,
+	"description": "Whether the note is visible to the customer."}},
+	"required": ["id", "note"], "additionalProperties": False}
+
+
+def _write(name, schema=None, destructive=False, idempotent=False, readonly=False):
+	a = _ability(name, schema=schema or {"type": "object", "properties": {"id": {"type": "integer"},
+		"fields": {"type": "object"}}, "required": ["id", "fields"]})
+	a["meta"]["annotations"] = {"readonly": readonly, "destructive": destructive, "idempotent": idempotent}
+	return a
+
+
+# What 0.15.0 (read-only) listed for plain=[ORDERS], restricted=[PRODUCTS]: with no
+# write list the tool list must not change by one byte.
+READ_ONLY_TOOLS = [
+	{"name": "woocommerce_orders_query", "title": "Orders Query", "description": "Does woocommerce/orders-query.",
+		"inputSchema": {"type": "object", "default": {}, "properties": {
+			"page": {"type": "integer", "default": 1}, "per_page": {"type": "integer"},
+			"include_line_items": {"type": "boolean"}, "status": {"type": "array", "items": {"type": "string"}}}},
+		"annotations": {"title": "Orders Query", "readOnlyHint": True, "destructiveHint": False,
+			"idempotentHint": True}},
+	{"name": "woocommerce_products_query", "title": "Products Query",
+		"description": "Does woocommerce/products-query.\n\nNeeds the Website Connector Manager role in the POS.",
+		"inputSchema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]},
+		"annotations": {"title": "Products Query", "readOnlyHint": True, "destructiveHint": False,
+			"idempotentHint": True}},
+]
+READ_ONLY_INSTRUCTIONS = ("This server reads ONE store's website: {host}. It is read-only: it cannot "
+	"change the site, and it has no POS tools. Every other store has its own server with the same tool "
+	"names. Before calling a tool here, check the task is for this website; when reporting what you "
+	"found, name the site.")
+
+
+class WriteConfig(_Fresh, unittest.TestCase):
+	def test_an_ability_belongs_in_one_list(self):
+		for plain, restricted, write in (([NOTE], [], [NOTE]), ([], [NOTE], [NOTE])):
+			with _env(None, "https://shop.example.com", plain=plain, restricted=restricted, write=write):
+				with self.assertRaisesRegex(RuntimeError, "WEB_ABILITIES_WRITE"):
+					web.load_config()
+
+	def test_a_write_list_alone_is_enough_and_names_are_checked(self):
+		with _env(None, "https://shop.example.com", plain=(), write=[NOTE, DELETE]):
+			self.assertEqual(web.load_config().abilities, {NOTE: web.WRITE, DELETE: web.WRITE})
+		with _env(None, "https://shop.example.com", write=["Not A Name"]):
+			with self.assertRaises(RuntimeError):
+				web.load_config()
+
+	def test_whatever_a_deployment_lists_is_bridged(self):
+		# No ability is refused by name: the deployment decides.
+		with _env(None, "https://shop.example.com", write=[DELETE, "woocommerce/order-update-status",
+				"fluent-crm/send-email-to-contact"]):
+			self.assertEqual(len([k for k, v in web.load_config().abilities.items() if v == web.WRITE]), 3)
+
+	def test_the_http_method_is_wordpress_own_rule(self):
+		self.assertEqual(web.http_method({"readonly": True, "destructive": True}), "GET")
+		self.assertEqual(web.http_method({"readonly": False, "destructive": True, "idempotent": True}), "DELETE")
+		self.assertEqual(web.http_method({"readonly": None, "destructive": True, "idempotent": None}), "POST")
+		self.assertEqual(web.http_method({"readonly": False, "destructive": False, "idempotent": True}), "POST")
+		self.assertEqual(web.http_method(None), "POST")
+
+
+class Writes(_App, unittest.TestCase):
+	"""Through the real ASGI app, with a write list."""
+
+	def setUp(self):
+		super().setUp()
+		for a in (_write(NOTE, schema=NOTE_SCHEMA), _write(SET_META, idempotent=True),
+				_write(DELETE, destructive=True, idempotent=True,
+					schema={"type": "object", "properties": {"id": {"type": "integer"},
+						"force": {"type": "boolean"}}, "required": ["id"]}),
+				_write(UPSERT, destructive=True, schema={"type": "object", "properties": {
+					"contact_id": {"type": "integer"}, "email": {"type": "string"}, "first_name": {"type": "string"},
+					"add_tags": {"type": "array"}, "custom_fields": {"type": "object"}}}),
+				_write("example/bulk-set-meta"), _write("fluent-crm/send-email-to-contact"),
+				_write("woocommerce/order-update-status")):
+			self.wp.abilities[a["name"]] = a
+
+	def _wclient(self, write=(NOTE, SET_META, DELETE, UPSERT)):
+		from starlette.testclient import TestClient
+
+		from gunstore_mcp import server
+		self.env = _env(self.pos, self.wp.server.url, plain=(ORDERS,), restricted=(PRODUCTS,), write=write)
+		self.env.start()
+		self.addCleanup(self.env.stop)
+		self.mcp = server.build()
+		client = TestClient(server.http_app(self.mcp), base_url="http://localhost:8790")
+		client.__enter__()
+		self.addCleanup(client.__exit__, None, None, None)
+		return client
+
+	def test_an_empty_write_list_lists_exactly_what_the_read_only_connector_did(self):
+		from starlette.testclient import TestClient
+
+		from gunstore_mcp import server
+		host = urlparse(self.wp.server.url).netloc
+		self.wp.abilities[PRODUCTS] = _ability(PRODUCTS, schema={"type": "object", "properties": {
+			"id": {"type": "integer", "required": True}}})
+		for write in (None, (), ("",)):
+			with _env(self.pos, self.wp.server.url, plain=(ORDERS,), restricted=(PRODUCTS,), write=write):
+				mcp = server.build()
+				with TestClient(server.http_app(mcp), base_url="http://localhost:8790") as c:
+					tools = self._rpc(c, "T-VIEW", "tools/list")["result"]["tools"]
+			self.assertEqual(tools, READ_ONLY_TOOLS, write)
+			self.assertEqual(mcp.instructions, READ_ONLY_INSTRUCTIONS.format(host=host), write)
+
+	def test_write_tools_and_their_hints(self):
+		c = self._wclient(write=(NOTE, SET_META, DELETE, UPSERT, "example/bulk-set-meta",
+			"fluent-crm/send-email-to-contact", "woocommerce/order-update-status"))
+		tools = {t["name"]: t for t in self._rpc(c, "T-VIEW", "tools/list")["result"]["tools"]}
+		self.assertTrue(tools["woocommerce_orders_query"]["annotations"]["readOnlyHint"])
+		hints = {n: (t["annotations"]["readOnlyHint"], t["annotations"]["destructiveHint"])
+			for n, t in tools.items() if n not in ("woocommerce_orders_query", "woocommerce_products_query")}
+		self.assertEqual(hints, {
+			"woocommerce_order_add_note": (False, False), "example_set_meta": (False, False),
+			"woocommerce_product_delete": (False, True), "fluent_crm_upsert_contact": (False, True),
+			"example_bulk_set_meta": (False, True), "fluent_crm_send_email_to_contact": (False, True),
+			"woocommerce_order_update_status": (False, True)})
+		note = tools["woocommerce_order_add_note"]
+		self.assertIn("customer_note", note["inputSchema"]["properties"], "exposed as the site defines it")
+		self.assertIn("With customer_note true the note is also emailed to the customer; without it "
+			"(default false) the note is private.", note["description"])
+		self.assertIn("Changes the website. Needs the Website Connector Manager role", note["description"])
+		self.assertNotIn("emailed", tools["example_set_meta"]["description"])
+		self.assertIn("work only for a Website Connector Manager", self.mcp.instructions)
+		self.assertNotIn("read-only", self.mcp.instructions)
+		self.assertEqual(self.wp.runs(), [], "the catalog never runs an ability")
+
+	def test_a_viewer_is_refused_a_write_and_the_refusal_is_recorded(self):
+		c = self._wclient()
+		err, text = self._call(c, "T-VIEW", "woocommerce_order_add_note", {"id": 7, "note": "Called back"})
+		self.assertTrue(err)
+		self.assertIn("woocommerce_order_add_note changes the website and needs the Website Connector "
+			"Manager role in the POS; your account has Website Connector Viewer.", text)
+		self.assertEqual(self.wp.runs(), [], "a refused write never reaches the site")
+		self.assertEqual([(u, e["phase"], e["tool"]) for u, e in self.pos.audits], [
+			("viewer@x.com", "started", "woocommerce_order_add_note"),
+			("viewer@x.com", "failed", "woocommerce_order_add_note")])
+		self.assertIn("needs the Website Connector Manager role", self.pos.audits[1][1]["error"])
+		err, text = self._call(c, "T-NONE", "example_set_meta", {"id": 1, "fields": {"t": "x"}})
+		self.assertTrue(err)
+		self.assertIn("no website access role", text)
+		self.assertEqual(self.wp.runs(), [])
+
+	def test_a_manager_writes_with_post_and_the_input_in_the_body(self):
+		c = self._wclient()
+		err, text = self._call(c, "T-MGR", "woocommerce_order_add_note",
+			{"id": 7, "note": "Customer asked to hold the order.", "customer_note": True})
+		self.assertFalse(err, text)
+		self.assertEqual(json.loads(text), {"ran": NOTE, "method": "POST", "body": {"input": {
+			"id": 7, "note": "Customer asked to hold the order.", "customer_note": True}}},
+			"passed through as given")
+		method, path, headers, body = [x for x in self.wp.server.seen if "/run" in x[1]][-1]
+		self.assertEqual((method, urlparse(path).query), ("POST", ""))
+		self.assertEqual(headers.get("Content-Type"), "application/json")
+		self.assertEqual([(u, e["phase"]) for u, e in self.pos.audits], [("mgr@x.com", "started"),
+			("mgr@x.com", "ok")])
+		err, text = self._call(c, "T-MGR", "example_set_meta", {"id": 12, "fields": {"title": "New"}})
+		self.assertFalse(err, text)
+		self.assertEqual(json.loads(text)["body"], {"input": {"id": 12, "fields": {"title": "New"}}})
+		# Without arguments a POST sends an empty input object (the site validates it).
+		err, text = self._call(c, "T-MGR", "fluent_crm_upsert_contact")
+		self.assertEqual(json.loads(text)["body"], {"input": {}})
+
+	def test_a_destructive_idempotent_write_uses_delete_with_the_input_in_the_query(self):
+		c = self._wclient()
+		err, text = self._call(c, "T-MGR", "woocommerce_product_delete", {"id": 5, "force": False})
+		self.assertFalse(err, text)
+		self.assertEqual(json.loads(text), {"ran": DELETE, "method": "DELETE",
+			"query": [["input[id]", "5"], ["input[force]", "0"]]})
+
+	def test_a_write_audit_record_names_the_target_not_the_content(self):
+		c = self._wclient()
+		self._call(c, "T-MGR", "woocommerce_order_add_note", {"id": 7, "note": "Gate code 4411, cell 555-0100"})
+		self._call(c, "T-MGR", "fluent_crm_upsert_contact", {"email": "jane.doe@example.com",
+			"first_name": "Jane", "add_tags": ["VIP", 4], "custom_fields": {"dob": "1980-01-01"}})
+		self._call(c, "T-MGR", "example_set_meta", {"id": 12, "fields": {"title": "Secret launch"}})
+		started = [json.loads(e["arguments"]) for _, e in self.pos.audits if e["phase"] == "started"]
+		self.assertEqual(started, [
+			{"id": 7, "note": "<29 characters>"},
+			{"email": "j***@example.com", "first_name": "<4 characters>", "add_tags": ["VIP", 4],
+				"custom_fields": ["dob"]},
+			{"id": 12, "fields": ["title"]}])
+		everything = json.dumps(self.pos.audits)
+		for private in ("4411", "555-0100", "jane.doe", "Jane", "1980", "Secret launch"):
+			self.assertNotIn(private, everything)
+		self.assertEqual([e["tool"] for _, e in self.pos.audits if e["phase"] == "started"],
+			["woocommerce_order_add_note", "fluent_crm_upsert_contact", "example_set_meta"])
+		# Reads keep their arguments as before.
+		self._call(c, "T-MGR", "woocommerce_orders_query", {"per_page": 3})
+		self.assertEqual(json.loads(self.pos.audits[-2][1]["arguments"]), {"per_page": 3})
+
+	def test_bulk_items_keep_their_ids_and_field_names(self):
+		self.assertEqual(web.audit_record({"items": [{"id": 1, "fields": {"a": "x"}}, {"id": 2, "fields": {}}]}),
+			{"items": [{"id": 1, "fields": ["a"]}, {"id": 2, "fields": []}]})
+		many = web.audit_record({"items": [{"id": i} for i in range(60)]})["items"]
+		self.assertEqual((len(many), many[-1]), (51, "... 10 more"))
+		self.assertEqual(web.audit_record({"email": "not-an-email", "contact_ids": [1, 2], "dry_run": True}),
+			{"email": "***", "contact_ids": [1, 2], "dry_run": True})
+
+	def test_write_errors_say_whether_anything_changed(self):
+		c = self._wclient()
+		args = {"id": 7, "note": "x"}
+		cases = [
+			((400, {"code": "rest_invalid_param", "message": "note is too short."}, 0),
+				"did not accept the request for woocommerce/order-add-note (HTTP 400). The website said: "
+				"note is too short.", False),
+			((403, {"code": "rest_ability_cannot_execute", "message": "Sorry."}, 0), "not allowed to run", False),
+			((404, {"code": "woocommerce_order_invalid_id", "message": "Invalid order ID."}, 0),
+				"The website said: Invalid order ID.", False),
+			((405, {"code": "rest_ability_invalid_method", "message": "x"}, 0),
+				"refused a POST request for woocommerce/order-add-note", False),
+			((500, {"code": "internal_server_error", "message": "Critical error."}, 0),
+				"The change may or may not have been made", True),
+		]
+		for reply, expected, maybe in cases:
+			self.wp.run_reply = reply
+			err, text = self._call(c, "T-MGR", "woocommerce_order_add_note", args)
+			self.assertTrue(err, reply)
+			self.assertIn(expected, text, reply)
+			self.assertEqual("may or may not" in text, maybe, reply)
+			self.assertEqual(self.pos.audits[-1][1]["phase"], "failed")
+			self.assertIn(expected, self.pos.audits[-1][1]["error"], reply)
+
+	def test_a_write_that_times_out_is_not_retried_and_may_have_happened(self):
+		self.wp.run_reply = (200, {}, 1.0)
+		c = self._wclient()
+		with patch.object(web, "SITE_TIMEOUT", 0.2):
+			err, text = self._call(c, "T-MGR", "woocommerce_order_add_note", {"id": 7, "note": "x"})
+		self.assertTrue(err)
+		self.assertIn("The change may or may not have been made: check on the website before trying "
+			"again.", text)
+		self.assertEqual(len(self.wp.runs()), 1, "sent once")
+
+	def test_credentials_never_appear_in_write_output(self):
+		c = self._wclient()
+		self.wp.run_reply = (500, {"code": "x", "message": f"auth was Basic {BASIC} pw {PASSWORD}"}, 0)
+		self._call(c, "T-MGR", "woocommerce_order_add_note", {"id": 7, "note": "x"})
+		everything = "\n".join(self.outputs) + json.dumps(self.pos.audits) + self.log.getvalue()
+		for secret in SECRETS:
+			self.assertNotIn(secret, everything)
 
 
 class Verifier(unittest.TestCase):

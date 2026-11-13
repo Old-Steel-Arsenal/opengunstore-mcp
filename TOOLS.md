@@ -553,8 +553,8 @@ it (`woocommerce/orders-query` → `woocommerce_orders_query`) with the site's o
 description and input schema; pass the arguments that schema lists (paging is
 usually `page` / `per_page`).
 
-- Needs a website role in the POS: Website Viewer runs the listed abilities, Website
-  Manager also the restricted ones (their description says so).
+- Needs a website role in the POS: Website Connector Viewer runs the listed abilities,
+  Website Connector Manager also the restricted ones (their description says so).
 - Results longer than 150,000 characters are cut; ask for a smaller page.
 - Nothing here writes to the site. Setup, gates and errors: README, "Website connector".
 

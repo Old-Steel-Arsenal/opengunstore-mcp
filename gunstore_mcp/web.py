@@ -53,6 +53,9 @@ SITE_USER = "WEB_SITE_USER"
 SITE_PASSWORD = "WEB_SITE_APP_PASSWORD"
 ABILITIES = "WEB_ABILITIES"
 ABILITIES_RESTRICTED = "WEB_ABILITIES_RESTRICTED"
+# The POS roles that give website access (the POS decides; these name them to users).
+VIEWER_ROLE = "Website Connector Viewer"
+MANAGER_ROLE = "Website Connector Manager"
 
 API = "/wp-json/wp-abilities/v1/abilities/"
 SITE_TIMEOUT = 30
@@ -283,6 +286,19 @@ def _input_schema(ability: str, raw: Any) -> tuple[dict, str]:
     return schema, mode
 
 
+def _empty_input(raw: Any) -> dict | None:
+    """The input for a call made without arguments. A query string cannot carry an
+    empty object, and WordPress refuses a missing input for an object schema unless
+    the schema has a top-level default. So without one, send the properties' own
+    declared defaults (what the ability would assume anyway); with none of those,
+    send nothing and let the site say which input it needs."""
+    if not isinstance(raw, dict) or "default" in raw or not isinstance(raw.get("properties"), dict):
+        return None
+    defaults = {k: v["default"] for k, v in raw["properties"].items()
+                if isinstance(v, dict) and "default" in v}
+    return defaults or None
+
+
 class SiteTool(Tool):
     """One site ability as one MCP tool. `fn(input)` calls the site; run() adds the
     role check and the audit record around it, in a worker thread."""
@@ -290,23 +306,25 @@ class SiteTool(Tool):
     ability: str
     restricted: bool
     input_mode: str
+    # What a call without arguments sends (see _empty_input).
+    empty_input: dict | None = None
 
     def _invoke(self, arguments: dict) -> str:
         from mcp.server.auth.middleware.auth_context import get_access_token
 
         role = getattr(get_access_token(), "web_access", "")
         if not role:
-            raise Refused("Your POS account has no website access role (Website Viewer or "
-                          "Website Manager). Ask a manager to add one.")
+            raise Refused(f"Your POS account has no website access role ({VIEWER_ROLE} or "
+                          f"{MANAGER_ROLE}). Ask a manager to add one.")
         if self.restricted and role != "manager":
-            raise Refused(f"{self.name} needs the Website Manager role in the POS; your account "
-                          "has Website Viewer. Ask a manager.")
+            raise Refused(f"{self.name} needs the {MANAGER_ROLE} role in the POS; your account "
+                          f"has {VIEWER_ROLE}. Ask a manager.")
         if self.input_mode == NO_INPUT:
             value = None
         elif self.input_mode == WRAPPED_INPUT:
             value = arguments.get("input")
         else:
-            value = arguments or None
+            value = arguments or self.empty_input
         return self.fn(self.ability, value)
 
     async def run(self, arguments: dict[str, Any], context=None, convert_result: bool = False) -> Any:
@@ -334,7 +352,7 @@ def make_tool(site: Site, ability: str, meta: dict, restricted: bool) -> SiteToo
     label = str(meta.get("label") or "") or None
     description = str(meta.get("description") or label or ability)
     if restricted:
-        description += "\n\nNeeds the Website Manager role in the POS."
+        description += f"\n\nNeeds the {MANAGER_ROLE} role in the POS."
     return SiteTool(
         fn=site.run, name=tool_name(ability), title=label,
         description=description, parameters=schema, fn_metadata=_PLACEHOLDER_META,
@@ -342,7 +360,8 @@ def make_tool(site: Site, ability: str, meta: dict, restricted: bool) -> SiteToo
         annotations=ToolAnnotations(title=label, readOnlyHint=True,
                                     destructiveHint=False,
                                     idempotentHint=annotations.get("idempotent") is True),
-        ability=ability, restricted=restricted, input_mode=mode)
+        ability=ability, restricted=restricted, input_mode=mode,
+        empty_input=_empty_input(meta.get("input_schema")) if mode == OBJECT_INPUT else None)
 
 
 class Catalog:

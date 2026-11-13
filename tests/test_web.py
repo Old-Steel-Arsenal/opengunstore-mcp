@@ -264,8 +264,8 @@ class ReadOnlyGate(_Fresh, unittest.TestCase):
 			"id": {"type": "integer"}, "email": {"type": "string"}}, "required": ["id"]})
 		self.assertTrue(products.annotations.readOnlyHint)
 		self.assertFalse(products.annotations.destructiveHint)
-		self.assertIn("Website Manager", products.description)
-		self.assertNotIn("Website Manager", tools["woocommerce_orders_query"].description)
+		self.assertIn("Website Connector Manager", products.description)
+		self.assertNotIn("Manager", tools["woocommerce_orders_query"].description)
 		self.assertEqual(tools["woocommerce_orders_query"].parameters["properties"]["page"],
 			{"type": "integer", "default": 1})
 
@@ -360,11 +360,30 @@ class Bridge(_Fresh, unittest.TestCase):
 		self.assertFalse(err, text)
 		self.assertEqual(json.loads(text)["query"], [])
 
+	def test_no_arguments_without_a_top_level_default_sends_the_property_defaults(self):
+		# WordPress refuses a missing input for an object schema without a top-level
+		# default, and a query string cannot carry {}: the declared defaults stand in.
+		schema = {"type": "object", "properties": {"include_counts": {"type": "boolean", "default": False},
+			"per_page": {"type": "integer", "default": 20}, "search": {"type": "string"}}}
+		self.wp.abilities[PRODUCTS] = _ability(PRODUCTS, schema=schema)
+		bare = "example/bare-object"
+		self.wp.abilities[bare] = _ability(bare, schema={"type": "object", "properties": {
+			"search": {"type": "string"}}})
+		c = self._client(restricted=(), plain=(ORDERS, PRODUCTS, bare))
+		err, text = self._call(c, "T-VIEW", "woocommerce_products_query")
+		self.assertFalse(err, text)
+		self.assertEqual(json.loads(text)["query"], [["input[include_counts]", "0"], ["input[per_page]", "20"]])
+		err, text = self._call(c, "T-VIEW", "woocommerce_products_query", {"search": "x"})
+		self.assertEqual(json.loads(text)["query"], [["input[search]", "x"]], "given arguments go as given")
+		err, text = self._call(c, "T-VIEW", "example_bare_object")
+		self.assertEqual(json.loads(text)["query"], [], "no defaults to send: the site decides")
+
 	def test_restricted_abilities_need_manager(self):
 		c = self._client()
 		err, text = self._call(c, "T-VIEW", "woocommerce_products_query")
 		self.assertTrue(err)
-		self.assertIn("Website Manager", text)
+		# The POS role's real name: Frappe's own "Website Manager" gives no access.
+		self.assertIn("needs the Website Connector Manager role", text)
 		self.assertEqual(self.wp.runs(), [], "a refused call never reaches the site")
 		self.assertEqual([e["phase"] for _, e in self.pos.audits], ["started", "failed"])
 		err, text = self._call(c, "T-MGR", "woocommerce_products_query")

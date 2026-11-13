@@ -341,7 +341,9 @@ connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
   deployment configuration; the code names no ability.
 - **One tool per ability**, named mechanically (`woocommerce/orders-query` →
   `woocommerce_orders_query`), with the site's description and input schema, marked
-  `readOnlyHint`.
+  `readOnlyHint`. A call without arguments sends the schema's declared property
+  defaults when it has no top-level default (a GET query cannot carry an empty
+  object, and WordPress refuses a missing one).
 - **Who may call what**: the POS reports each user's website role
   (`connector_identity` → `web_access`: `viewer`, `manager` or none). No role: every
   call is refused. Abilities in `WEB_ABILITIES_RESTRICTED` (e.g. contact-level data)

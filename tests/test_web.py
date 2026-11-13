@@ -349,6 +349,15 @@ class Bridge(_Fresh, unittest.TestCase):
 		self.assertEqual(r.status_code, 401, "no token, no tools")
 		self.assertIn("/.well-known/oauth-protected-resource/mcp", r.headers["www-authenticate"])
 
+	def test_the_instructions_name_the_website_and_say_read_only(self):
+		from gunstore_mcp import server
+		with _env(self.pos, self.wp.server.url):
+			text = server.build().instructions
+		self.assertIn(f"ONE store's website: {urlparse(self.wp.server.url).netloc}.", text)
+		self.assertIn("read-only", text)
+		self.assertNotIn(urlparse(self.pos.server.url).netloc, text, "names the site, not the POS")
+		self.assertNotIn("reads and writes", text)
+
 	def test_a_viewer_reads_and_the_call_is_audited_first(self):
 		c = self._client()
 		err, text = self._call(c, "T-VIEW", "woocommerce_orders_query",

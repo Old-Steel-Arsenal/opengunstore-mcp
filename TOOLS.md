@@ -555,6 +555,8 @@ usually `page` / `per_page`).
 
 - Needs a website role in the POS: Website Connector Viewer runs the listed abilities,
   Website Connector Manager also the restricted ones (their description says so).
+- The server's instructions name the website it reads (the host of `WEB_SITE_URL`) and
+  say it is read-only.
 - Results longer than 150,000 characters are cut; ask for a smaller page.
 - Nothing here writes to the site. Setup, gates and errors: README, "Website connector".
 

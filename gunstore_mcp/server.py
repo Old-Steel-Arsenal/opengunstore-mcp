@@ -151,9 +151,17 @@ def _http_settings() -> dict:
     }
 
 
-def _instructions() -> str | None:
+def _instructions(mode: str) -> str | None:
     """What the model is told about this server: which store it is. Clients show
     several stores' connectors side by side, all with the same tool names."""
+    if mode == WEB_MODE:
+        from .web import SITE_URL
+        # WEB_SITE_URL is required in this mode (web.load_config refuses to start without it).
+        return (f"This server reads ONE store's website: {store_host(SITE_URL)}. It is "
+                "read-only: it cannot change the site, and it has no POS tools. Every other "
+                "store has its own server with the same tool names. Before calling a tool "
+                "here, check the task is for this website; when reporting what you found, "
+                "name the site.")
     store = store_host()
     if not store:
         return None
@@ -176,7 +184,7 @@ def build() -> FastMCP:
         raise RuntimeError("GUNSTORE_MCP_MODE=web runs only as the remote connector "
                            "(GUNSTORE_MCP_TRANSPORT=http).")
     kwargs = _http_settings() if remote else {}
-    mcp = FastMCP(SERVER_NAMES[mode], instructions=_instructions(), **kwargs)
+    mcp = FastMCP(SERVER_NAMES[mode], instructions=_instructions(mode), **kwargs)
     # FastMCP takes no version; without this serverInfo reports the mcp SDK's
     # version, so clients can't tell which build of ours they're talking to.
     mcp._mcp_server.version = __version__

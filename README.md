@@ -347,6 +347,10 @@ connector surface `web_ro` (URL `https://pos.<domain>/connector/web_ro/mcp`).
   refuses the empty call and the tool answers by naming its parameters so the client
   retries with some; an ability that takes no parameters needs a top-level `default`
   in its input schema on the site to be callable over GET.
+- **It says which site it reads**: the server's instructions name the host of
+  `WEB_SITE_URL` and say it is read-only, so with several stores' connectors side by
+  side the model can tell them apart. There are no write tools, so no `confirm`
+  refusals either.
 - **Who may call what**: the POS reports each user's website role
   (`connector_identity` → `web_access`: `viewer`, `manager` or none). No role: every
   call is refused. Abilities in `WEB_ABILITIES_RESTRICTED` (e.g. contact-level data)

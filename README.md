@@ -201,7 +201,7 @@ claude mcp add gunstore-pos-cpa --scope user \
 |---|---|
 | `marketing_find` / `marketing_contact` | marketing contacts by email, name, tag, status or source / one contact with its tags, latest events and open reminders (read-only) |
 | `marketing_tags` | add and remove tags (`confirm`); sends nothing |
-| `marketing_consent` | `subscribe` records a consent given outside the website, `unsubscribe` (managers) stops marketing mail (`confirm`); a suppressed contact is never put back |
+| `marketing_consent` | `subscribe` records a consent given outside the website, `unsubscribe` stops marketing mail (`confirm`); a suppressed contact is never put back |
 | `marketing_requests` | back-in-stock and model-alert reminders: `list` (read), `close` (`confirm`) |
 
 ### Compliance repairs and store admin (`tools/compliance.py`)

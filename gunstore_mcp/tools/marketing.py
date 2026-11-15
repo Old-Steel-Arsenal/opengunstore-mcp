@@ -5,7 +5,7 @@ Reads: ``marketing_find``, ``marketing_contact``, ``marketing_requests`` with ac
 ``confirm=true``: ``marketing_tags``, ``marketing_consent``, ``marketing_requests`` close. Every call goes
 through a POS endpoint (``ffl_core.api.marketing``) that keeps the marketing rules server-side: consent
 only moves forward (an unsubscribed, bounced or complained contact is never put back here), only a
-manager may unsubscribe someone, a tag is a slug. Nothing here sends email. A store with marketing
+manager may put a suppressed contact back (not from here), a tag is a slug. Nothing here sends email. A store with marketing
 switched off (Marketing Settings › Enabled) refuses every call and says so.
 
 Full surface only. A user whose only POS role is Marketing User can sign in to the full connector and use
@@ -69,8 +69,8 @@ def register(mcp: Any) -> None:
         subscribe: record a consent given outside the website (channel says where: "in store", "phone";
         note is optional). Only a Not Subscribed contact moves to Subscribed; one that unsubscribed, bounced
         or complained is refused (only a manager, on the contact's form in the POS, can put one back).
-        unsubscribe: stop marketing mail to the contact (note is the reason, optional). Managers only (Sales
-        Manager); a contact already bounced or complained stays as it is.
+        unsubscribe: stop marketing mail to the contact, e.g. to honour an opt-out (note is the reason,
+        optional). Marketing User or a manager; a contact already bounced or complained stays as it is.
         Who did it goes on the contact's log. Sends nothing. Requires confirm=true."""
         if action == "subscribe" and not (channel or "").strip():
             raise ValueError("subscribe needs channel: where the consent was given.")

@@ -321,7 +321,7 @@ rest for them. Full surface only.
 | Find marketing contacts | `marketing_find` | no | By part of the email, part of a name, a tag (exact), status, or source (a prefix). Returns the total and a page, each with its tags |
 | One contact in full | `marketing_contact` | no | The record, tags, whether it is suppressed, the latest events and the Open reminders |
 | Tag a contact | `marketing_tags` | yes | `add` and `remove` lists. A tag is lowercase letters, digits and dashes; anything else is refused |
-| Record or withdraw consent | `marketing_consent` | yes | `subscribe` (needs `channel`) moves only Not Subscribed to Subscribed; unsubscribed, bounced or complained contacts are refused. `unsubscribe` is for managers (Sales Manager); `note` is the reason |
+| Record or withdraw consent | `marketing_consent` | yes | `subscribe` (needs `channel`) moves only Not Subscribed to Subscribed; unsubscribed, bounced or complained contacts are refused. `unsubscribe` (Marketing User or a manager) honours an opt-out; `note` is the reason. Putting a contact back is a manager's, on the POS form |
 | Reminder requests | `marketing_requests` | close | `list` reads Open requests by default (`status="all"` for every one), by kind, contact or item. `close` stops an Open request; it is never notified |
 
 ## 4d. Gunsmith and memberships (`tools/services.py`)

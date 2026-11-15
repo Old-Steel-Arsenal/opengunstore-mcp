@@ -136,7 +136,7 @@ where the reason it was ended is visible.
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
 | Check a receive before booking it | `receive_goods_preview(payload?)` | no | Without a payload: the valid `source` values and seller payment methods. With the exact `receive_goods` payload: what Submit will pay a private seller, unknown item codes, serials already on file |
-| Buy a gun from a walk-in seller and pay them now | `trade_in_intake` | yes | Makes the gun's Used Item, books the acquisition and FastBound push, receives the stock and pays the seller (Cash comes out of the drawer; other methods need `payout_reference`). Store credit inside a cart is not offered |
+| Buy a gun from a walk-in seller and pay them now | `trade_in_intake` | yes | Makes the gun's Used Item, books the acquisition and FastBound push, receives the stock and pays the seller (Cash comes out of the drawer; other methods need `payout_reference`). Store credit inside a cart is not offered. `crm_deal` links it to the sell-request deal the gun was offered on and wins that deal |
 | Receive a **distributor** parcel | `distributor_incoming`, then `distributor_receive` | booking only | See section 9b. Use this, not `receive_goods`, for anything a distributor shipped, or the waiting order never gets its gun |
 | Receive goods (including firearms) | `receive_goods` | yes | Creates and submits a Purchase Receipt; each firearm gets an FFL Acquisition and is pushed to FastBound. Firearms must come in this way, not through `add_stock`. A paid purchase from a private seller (`acquisition_source="Individual"` with a blank, `Purchase` or `Individual` type and a cost) needs `seller_payment_method` (`Cash`, `Zelle`, `Check` or `ACH`) plus `seller_payment_reference` unless Cash. The POS books the payment in the same transaction and returns `seller_payment`; without those fields the receipt is refused. Consignment, gunsmithing, transfers and dealer purchases take no payment |
 | Add stock for a plain product | `add_stock` | yes | Ammunition, accessories and other non-serialized items |
@@ -299,12 +299,14 @@ POS answers those steps with its own "method not found" error.
 
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
-| Find leads or deals | `crm_find` | no | By email, part of a name, status, owner, or `waiting_for_reply`. Leads leave out other mail unless `other_mail=true` |
+| Find leads or deals | `crm_find` | no | By email, part of a name, status, owner, or `waiting_for_reply`. Leads leave out other mail unless `other_mail=true`. `sell_requests=true` keeps the deals that are guns offered to the store, with the gun, the offer and `sell_state` (no offer, offered, waiting for the gun, received) |
 | One deal in full | `crm_deal` | no | The record, notes, open tasks and the customer card. The card needs *Link deals to POS orders* on, and never holds an ID, a date of birth or a 4473 |
 | Convert a lead, change a status or owner | `crm_lead_action` | yes | A lead moved off Other mail becomes an ordinary lead. A deal is normally Won by its invoice |
 | Add a note or a task | `crm_note_task` | yes | Sends nothing to the customer |
 | The want list | `crm_want` | add, close | `action="list"` reads open and matched wants. `add` puts a want on a deal's primary contact (keywords, an item, or both); `close` stops its alerts. A fitting arrival gives the want's owner a task; nothing goes to the customer |
 | Turn a deal into a sale | `crm_open_order` | yes | Saves a Create Order draft for someone to finish in the POS. With no customer yet it returns the matches and saves nothing. Takes no payment |
+| A gun offered to the store | `crm_sell_request` | offer, accepted | `card` reads the Gun offered card (the gun as the seller described it on the website form, so its condition is no store grade; photos, offer, accepted day, received). `offer` stores the amount the store offers (no email; never a sale). `accepted` starts the wait for the gun. `intake` reads what the register's Trade-in dialog is filled with. Books nothing: the gun enters stock only when staff submit the Trade-in at the register, or `trade_in_intake` with `crm_deal`, once it is in the store |
+| Hold a gun for a deal | `crm_deal_hold` | hold, extend, release | `list` reads the deal's guns, their holds and what each needs. `hold` keeps serials for the deal's customer for 48 hours, counter and website; `extend` adds 48 hours once; `release` ends a hold. A step that needs a manager is refused unless the server signs in as one. Needs *Hold guns for deals* on for new holds. Not on a sell request |
 
 ## 4d. Gunsmith and memberships (`tools/services.py`)
 
@@ -476,7 +478,7 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-188 tools, of which 173 register by default (the 4 distributor queue actions, the 4
+190 tools, of which 175 register by default (the 4 distributor queue actions, the 4
 GunBroker write actions and the 7 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
@@ -507,7 +509,7 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 172 tools remotely (`upload_attachment` reads a path on the server and is never
+surface is 174 tools remotely (`upload_attachment` reads a path on the server and is never
 registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The four GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
@@ -587,4 +589,4 @@ the arguments that schema lists (paging is usually `page` / `per_page`).
 
 ---
 
-*Total tools: 188 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 6 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 173 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.16.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 190 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 8 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 175 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.16.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

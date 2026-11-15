@@ -702,6 +702,12 @@ class TradeIn(Base):
         p = self.client.calls[1][2]["payload"]
         self.assertEqual((p["has_firearm"], p["payout_reference"]), (0, None))
         self.assertNotIn("serial_no", p)
+        self.assertNotIn("crm_deal", p)
+
+    def test_crm_deal_goes_into_the_payload(self):
+        self.client.replies[TI + "seller_defaults"] = self.DEFAULTS
+        self.t("trade_in_intake")(**WRITES["trade_in_intake"], crm_deal=" CRM-DEAL-1 ", confirm=True)
+        self.assertEqual(self.client.calls[1][2]["payload"]["crm_deal"], "CRM-DEAL-1")
 
     def test_missing_seller_address_is_refused_before_the_write(self):
         self.client.replies[TI + "seller_defaults"] = {**self.DEFAULTS, "source_zip": ""}

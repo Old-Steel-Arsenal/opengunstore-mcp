@@ -877,7 +877,7 @@ def register(mcp: Any) -> None:
         source_last_name: str | None = None, source_suffix: str | None = None,
         source_address_line1: str | None = None, source_city: str | None = None,
         source_state: str | None = None, source_zip: str | None = None,
-        confirm: bool = False,
+        crm_deal: str | None = None, confirm: bool = False,
     ) -> Any:
         """Buy a gun (and/or accessories or ammo) from a walk-in seller at the counter and pay
         them now: it makes the gun's own Used Item, books the A&D acquisition and its FastBound
@@ -893,6 +893,10 @@ def register(mcp: Any) -> None:
         Good, Good, Fair), acquisition_cost (what the store pays), retail_price?, importer?,
         barrel_length?, finish?, year_made?, item_code? (an existing used-firearm Item; blank
         makes one), storage_location?}. accessories: [{item_code, qty, rate (paid per unit)}].
+        crm_deal: the sell-request deal the gun was offered on (crm_sell_request action="intake"
+        gives the firearm's known fields and the offer); once this commits the POS links the
+        trade-in to that deal and marks it Won, if the deal's customer is the seller. Only for a gun
+        that is in the store and inspected.
         Returns {item_code, acquisition, purchase_receipt, payout: {entry, journal_entry}}.
         confirm=true."""
         if not firearm and not accessories:
@@ -950,4 +954,6 @@ def register(mcp: Any) -> None:
             "accessories": accessories or [], "apply_credit": 0,
             "payout_method": payout_method, "payout_reference": ref or None,
         }
+        if (crm_deal or "").strip():
+            payload["crm_deal"] = crm_deal.strip()
         return client.call_method(_TI + "create_trade_in_intake", {"payload": payload})

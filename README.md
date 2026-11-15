@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-188 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 6 CRM + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 7 Range; 173 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 7 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+190 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 8 CRM + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 7 Range; 175 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 7 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 30 tools (the write surface is never registered), a per-name read-only
@@ -193,6 +193,8 @@ claude mcp add gunstore-pos-cpa --scope user \
 | `crm_find` / `crm_deal` | leads and deals by email, name, status, owner, or waiting for a reply / one deal with its notes, tasks and customer card (read-only) |
 | `crm_want` | the want list: `list` (read), `add` to a deal's contact, `close` (`confirm`); a fitting arrival gives the owner a task |
 | `crm_lead_action` / `crm_note_task` / `crm_open_order` | convert a lead, change a status or owner / add a note or task / save a deal as a Create Order draft (`confirm`) |
+| `crm_sell_request` | a gun offered to the store: `card` and `intake` (read), `offer` an amount, `accepted` (`confirm`); books nothing |
+| `crm_deal_hold` | guns held for a deal: `list` (read), `hold` serials, `extend`, `release` (`confirm`) |
 
 ### Compliance repairs and store admin (`tools/compliance.py`)
 | Tool | Purpose |
@@ -297,7 +299,7 @@ so an assistant with two stores connected can check before it writes.
   `ffl_core/api/connector.py` and the Connector Audit Log doctype.
 - A user with **Restrict IP** set cannot use the connector: calls reach the POS from
   the connector (and ultimately from Claude's servers), never from the user's IP.
-- `cpa` mode keeps all three read-only layers. The full surface is **172 tools**
+- `cpa` mode keeps all three read-only layers. The full surface is **174 tools**
   remotely: `upload_attachment` reads a path on the *server* and is never registered
   there. The distributor queue actions never open remotely (the server refuses to start;
   `distributor_create_draft_order` is not one of them and is there);

@@ -896,7 +896,8 @@ def register(mcp: Any) -> None:
         crm_deal: the sell-request deal the gun was offered on (crm_sell_request action="intake"
         gives the firearm's known fields and the offer); once this commits the POS links the
         trade-in to that deal and marks it Won, if the deal's customer is the seller. Only for a gun
-        that is in the store and inspected.
+        that is in the store and inspected: firearm.condition_grade is the store's own grade from
+        inspecting it, never copied from the sell request's condition.
         Returns {item_code, acquisition, purchase_receipt, payout: {entry, journal_entry}}.
         confirm=true."""
         if not firearm and not accessories:

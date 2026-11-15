@@ -209,9 +209,10 @@ def register(mcp: Any) -> None:
     def crm_sell_request(deal: str, action: Literal["card", "offer", "accepted", "intake"] = "card",
                          amount: float | None = None, confirm: bool = False) -> Any:
         """A sell request: a gun someone offers the store, on its own deal (crm_find sell_requests=true).
-        card (read-only): the Gun offered card: {gun: what the seller's form said (manufacturer, model,
-        caliber, type, condition, serial, ...), photos (POS files, or website links not copied yet),
-        offer (0 = none yet), accepted_on, received}.
+        card (read-only): the Gun offered card: {gun: what the seller wrote on the website form
+        (manufacturer, model, caliber, type, condition, serial, ...; gun.condition is the seller's own
+        words, not a store grade), photos (POS files, or website links not copied yet), offer (0 = none
+        yet), accepted_on, received}.
         offer: store what the store offers (amount > 0); no email is sent and it never counts as a sale.
         accepted: the seller took the offer, so the deal waits for the gun from today.
         intake (read-only): what the register's Trade-in dialog is filled with to receive the gun.

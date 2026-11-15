@@ -74,7 +74,7 @@ Secrets stay in `.env` (loaded by the server), not in the agent config.
 
 > **Tool reference, organised by task (safety notes and alternatives included): [TOOLS.md](TOOLS.md)**
 
-190 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 8 CRM + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 7 Range; 175 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 7 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
+195 tools total: 10 counter orders + 5 customers + 5 gunsmith/membership + 8 CRM + 5 marketing + 15 compliance/store-admin + 11 generic + 69 curated + 16 distributor + 7 CPA reports + 30 shop-floor + 7 HR + 7 Range; 180 register by default. Three opt-in sets are held back: the 4 distributor queue actions (`GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`), the 4 GunBroker write actions (`GUNSTORE_MCP_GUNBROKER_ACTIONS=1`) and the 7 Range tools (`GUNSTORE_MCP_RANGE=1`, only for a store with the Range extension). None is registered otherwise — an absent tool cannot be talked into firing.
 
 **Modes**: `GUNSTORE_MCP_MODE=cpa` starts a read-only accountant surface —
 exactly 30 tools (the write surface is never registered), a per-name read-only
@@ -196,6 +196,14 @@ claude mcp add gunstore-pos-cpa --scope user \
 | `crm_sell_request` | a gun offered to the store: `card` and `intake` (read), `offer` an amount, `accepted` (`confirm`); books nothing |
 | `crm_deal_hold` | guns held for a deal: `list` (read), `hold` serials, `extend`, `release` (`confirm`) |
 
+### Marketing (`tools/marketing.py`)
+| Tool | Purpose |
+|---|---|
+| `marketing_find` / `marketing_contact` | marketing contacts by email, name, tag, status or source / one contact with its tags, latest events and open reminders (read-only) |
+| `marketing_tags` | add and remove tags (`confirm`); sends nothing |
+| `marketing_consent` | `subscribe` records a consent given outside the website, `unsubscribe` (managers) stops marketing mail (`confirm`); a suppressed contact is never put back |
+| `marketing_requests` | back-in-stock and model-alert reminders: `list` (read), `close` (`confirm`) |
+
 ### Compliance repairs and store admin (`tools/compliance.py`)
 | Tool | Purpose |
 |---|---|
@@ -299,7 +307,7 @@ so an assistant with two stores connected can check before it writes.
   `ffl_core/api/connector.py` and the Connector Audit Log doctype.
 - A user with **Restrict IP** set cannot use the connector: calls reach the POS from
   the connector (and ultimately from Claude's servers), never from the user's IP.
-- `cpa` mode keeps all three read-only layers. The full surface is **174 tools**
+- `cpa` mode keeps all three read-only layers. The full surface is **179 tools**
   remotely: `upload_attachment` reads a path on the *server* and is never registered
   there. The distributor queue actions never open remotely (the server refuses to start;
   `distributor_create_draft_order` is not one of them and is there);

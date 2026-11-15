@@ -36,8 +36,8 @@ from . import __version__, audit
 from .auth import FrappeTokenVerifier
 from .config import HTTP, get_config, get_transport, store_host
 from .modes import CPA_MODE, CPA_TOOL_NAMES, FULL_MODE, WEB_MODE, WEB_SURFACE, FilteredMCP, get_mode
-from .tools import (crm, compliance, curated, customers, distributor, generic, hr, orders, range_board,
-                    reports, services, shopfloor)
+from .tools import (crm, compliance, curated, customers, distributor, generic, hr, marketing, orders,
+                    range_board, reports, services, shopfloor)
 
 
 def _audited(fn, name: str, surface: str, args: tuple, kwargs: dict, record: dict | None = None):
@@ -108,6 +108,7 @@ def register_tools(mcp, mode: str | None = None) -> None:
     customers.register(target)
     services.register(target)
     crm.register(target)
+    marketing.register(target)
     compliance.register(target)
     hr.register(target)
 

@@ -308,6 +308,22 @@ POS answers those steps with its own "method not found" error.
 | A gun offered to the store | `crm_sell_request` | offer, accepted | `card` reads the Gun offered card (the gun as the seller described it on the website form, so its condition is no store grade; photos, offer, accepted day, received). `offer` stores the amount the store offers (no email; never a sale). `accepted` starts the wait for the gun. `intake` reads what the register's Trade-in dialog is filled with. Books nothing: the gun enters stock only when staff submit the Trade-in at the register, or `trade_in_intake` with `crm_deal`, once it is in the store |
 | Hold a gun for a deal | `crm_deal_hold` | hold, extend, release | `list` reads the deal's guns, their holds and what each needs. `hold` keeps serials for the deal's customer for 48 hours, counter and website; `extend` adds 48 hours once; `release` ends a hold. A step that needs a manager is refused unless the server signs in as one. Needs *Hold guns for deals* on for new holds. Not on a sell request |
 
+## 4c3. Marketing (`tools/marketing.py`)
+
+The store's own marketing list in the POS: contacts, their consent, tags and the reminders people asked
+for. Every call goes through a POS endpoint that keeps the marketing rules, and none sends email. A store
+with marketing switched off (Marketing Settings › Enabled) refuses every call and says so. A user whose
+only POS role is Marketing User can sign in to the full connector and use these five; the POS refuses the
+rest for them. Full surface only.
+
+| Task | Tool | Confirm | Notes |
+|---|---|---|---|
+| Find marketing contacts | `marketing_find` | no | By part of the email, part of a name, a tag (exact), status, or source (a prefix). Returns the total and a page, each with its tags |
+| One contact in full | `marketing_contact` | no | The record, tags, whether it is suppressed, the latest events and the Open reminders |
+| Tag a contact | `marketing_tags` | yes | `add` and `remove` lists. A tag is lowercase letters, digits and dashes; anything else is refused |
+| Record or withdraw consent | `marketing_consent` | yes | `subscribe` (needs `channel`) moves only Not Subscribed to Subscribed; unsubscribed, bounced or complained contacts are refused. `unsubscribe` is for managers (Sales Manager); `note` is the reason |
+| Reminder requests | `marketing_requests` | close | `list` reads Open requests by default (`status="all"` for every one), by kind, contact or item. `close` stops an Open request; it is never notified |
+
 ## 4d. Gunsmith and memberships (`tools/services.py`)
 
 | Task | Tool | Confirm | Notes |
@@ -478,7 +494,7 @@ present `unit_landed` as a landed cost, and do not multiply it by quantity as th
 ## 10. CPA mode (read-only accountant surface) and the report kit
 
 **Mode switch.** Set `GUNSTORE_MCP_MODE=cpa` at startup. The default `full` mode offers all
-190 tools, of which 175 register by default (the 4 distributor queue actions, the 4
+195 tools, of which 180 register by default (the 4 distributor queue actions, the 4
 GunBroker write actions and the 7 Range tools need explicit opt-in); the behaviour of `full` is unchanged. An
 unknown value refuses to start rather than silently degrading to a writable surface. In cpa
 mode the **write surface does not exist in the tool list**; it is not "present but
@@ -509,7 +525,7 @@ own POS roles.** Only tokens issued to Claude connectors (dynamically registered
 are accepted, and every call is written to the POS Connector Audit Log permanently (who,
 which connector, which tool, which arguments with secrets masked, success or failure; if the row
 cannot be written the tool does not run). The three cpa layers apply unchanged. The full
-surface is 174 tools remotely (`upload_attachment` reads a path on the server and is never
+surface is 179 tools remotely (`upload_attachment` reads a path on the server and is never
 registered remotely). The distributor queue actions never open remotely; `distributor_create_draft_order` does. The four GunBroker
 write actions open on the full connector only, where the POS deployment sets the switch
 from that store's own GunBroker setting. See the README, "Remote connector".
@@ -589,4 +605,4 @@ the arguments that schema lists (paging is usually `page` / `per_page`).
 
 ---
 
-*Total tools: 190 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 8 CRM tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 175 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.16.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*
+*Total tools: 195 (11 generic + 69 dedicated + 16 distributor + 7 report tools + 7 Range tools + 10 counter-order tools + 5 customer tools + 5 gunsmith/membership tools + 8 CRM tools + 5 marketing tools + 15 compliance and store-admin tools + 7 HR tools + 30 shop-floor). 180 register by default: the 4 distributor queue actions need `GUNSTORE_MCP_DISTRIBUTOR_ACTIONS=1`, the 4 GunBroker write actions need `GUNSTORE_MCP_GUNBROKER_ACTIONS=1` and the 7 Range tools need `GUNSTORE_MCP_RANGE=1`. `GUNSTORE_MCP_MODE=cpa` registers exactly 30 of them. Matches version v0.16.0; the README and the source in `gunstore_mcp/tools/` are authoritative for behaviour.*

@@ -27,7 +27,7 @@ from unittest.mock import patch
 
 from gunstore_mcp import config
 from gunstore_mcp.modes import CPA_TOOL_NAMES
-from gunstore_mcp.tools import (compliance, crm, curated, customers, distributor, generic, hr, orders,
+from gunstore_mcp.tools import (compliance, crm, curated, customers, distributor, generic, hr, marketing, orders,
                                 range_board, reports, services, shopfloor)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -96,10 +96,11 @@ def _live() -> dict:
     customers_n = _count(customers)
     services_n = _count(services)
     crm_n = _count(crm)
+    marketing_n = _count(marketing)
     compliance_n = _count(compliance)
     hr_n = _count(hr)
     always = (reports_n + shopfloor_n + orders_n + customers_n + services_n + compliance_n
-              + hr_n + crm_n)
+              + hr_n + crm_n + marketing_n)
     return {
         "generic": generic_n,
         "curated": cur_on,
@@ -121,6 +122,7 @@ def _live() -> dict:
         "customers": customers_n,
         "services": services_n,
         "crm": crm_n,
+        "marketing": marketing_n,
         "compliance": compliance_n,
         "hr": hr_n,
         "total": generic_n + cur_on + dist_on + always + range_on,
@@ -150,6 +152,7 @@ CLAIMS = [
     ("README.md", r"(\d+) customers", "customers"),
     ("README.md", r"(\d+) gunsmith/membership", "services"),
     ("README.md", r"(\d+) CRM \+", "crm"),
+    ("README.md", r"(\d+) marketing \+", "marketing"),
     ("README.md", r"(\d+) compliance/store-admin", "compliance"),
     ("README.md", r"(\d+) HR \+", "hr"),
     ("README.md", r"the (\d+) Range tools", "range"),
@@ -166,6 +169,7 @@ CLAIMS = [
     ("TOOLS.md", r"(\d+) customer tools", "customers"),
     ("TOOLS.md", r"(\d+) gunsmith/membership tools", "services"),
     ("TOOLS.md", r"(\d+) CRM tools", "crm"),
+    ("TOOLS.md", r"(\d+) marketing tools", "marketing"),
     ("TOOLS.md", r"(\d+) compliance and store-admin tools", "compliance"),
     ("TOOLS.md", r"(\d+) HR tools", "hr"),
     ("TOOLS.md", r"offers all\s+(\d+) tools", "total"),
@@ -224,7 +228,7 @@ class ExactClaims(unittest.TestCase):
         self.assertEqual(
             L["total"], L["generic"] + L["curated"] + L["distributor"] + L["reports"]
             + L["shopfloor"] + L["range"] + L["orders"] + L["customers"] + L["services"]
-            + L["crm"] + L["compliance"] + L["hr"])
+            + L["crm"] + L["marketing"] + L["compliance"] + L["hr"])
         # Two independent registration gates now, so the default surface is the
         # total less BOTH opt-in sets.
         self.assertEqual(L["default"], L["total"] - L["actions"] - L["gb_actions"] - L["range"])

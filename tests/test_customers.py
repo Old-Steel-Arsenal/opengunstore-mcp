@@ -102,7 +102,7 @@ class ConfirmGate(Base):
 
     def test_every_customer_manage_action_refuses_without_confirm(self):
         for kwargs in ({"action": "override_ban", "reason": "ok'd"},
-                       {"action": "set_status", "status": "Inactive"},
+                       {"action": "set_status", "status": "Active"},
                        {"action": "add_alert", "message": "ask for ID"}):
             with self.subTest(**kwargs), self.assertRaises(WriteRefused):
                 self.tool("customer_manage")(customer="C1", **kwargs)

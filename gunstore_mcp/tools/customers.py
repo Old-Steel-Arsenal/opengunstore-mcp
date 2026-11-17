@@ -33,7 +33,7 @@ _TERMINALS = "ffl_core.signing_terminal.list_terminals"
 
 _FIND_MAX = 10
 _LINK_KEYS = ("sign_url", "qr_svg")
-_STATUSES = ("Active", "Inactive", "Prospect", "Banned")
+_STATUSES = ("Active", "Banned")
 
 # customer_manage: which optional arguments each action takes (required ones first).
 _MANAGE_ARGS = {
@@ -199,7 +199,7 @@ def register(mcp: Any) -> None:
     def customer_manage(
         action: Literal["merge", "override_ban", "set_status", "add_alert"], customer: str,
         into: str | None = None, reason: str | None = None,
-        status: Literal["Active", "Inactive", "Prospect", "Banned"] | None = None,
+        status: Literal["Active", "Banned"] | None = None,
         message: str | None = None, confirm: bool = False,
     ) -> Any:
         """⚠ Manager actions on a customer. action:
@@ -213,15 +213,16 @@ def register(mcp: Any) -> None:
           customer_overview first and confirm which one stays with the user.
         * override_ban — let a Banned customer be served for the next 30 minutes; `reason`
           is required and goes on the customer's timeline. The customer stays Banned.
-        * set_status — Active | Inactive | Prospect | Banned. Banned needs a `reason`;
-          changing to or from Banned needs a manager.
+        * set_status — Active | Banned. Banned needs a `reason`; changing to or from
+          Banned needs a manager. For someone who no longer shops here, set the Customer's
+          `disabled` instead (frappe_update_document).
         * add_alert — add a staff alert (`message`) shown whenever the customer is picked
           at the counter; existing alerts are kept. Refused if the customer changed since
           it was read (call again).
 
         Arguments that do not belong to the action are refused. The POS enforces the
         roles: merge, override_ban and any change to or from Banned need a manager
-        (Sales Manager); other status changes and alerts need Customer write.
+        (Sales Manager); alerts need Customer write.
         Requires confirm=true."""
         customer = _clean(customer)
         if not customer:

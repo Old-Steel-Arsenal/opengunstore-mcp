@@ -60,7 +60,8 @@ def register(mcp: Any) -> None:
                  other_mail: bool = False, sell_requests: bool = False, limit: int = 20) -> Any:
         """Find CRM leads or deals, newest activity first. By customer email, part of a name, status or
         owner; waiting_for_reply keeps those whose last mail came from the customer. Leads leave out
-        other mail (senders who are not customers) unless other_mail=true. sell_requests=true keeps the
+        other mail (senders who are not customers); other_mail=true searches every lead, other mail
+        included (status="Other mail" for other mail only). sell_requests=true keeps the
         deals that are guns offered to the store, each with the gun, the offer and sell_state (no offer,
         offered, waiting for the gun, received). Read-only."""
         doctype = DOCTYPE[kind]
@@ -77,8 +78,8 @@ def register(mcp: Any) -> None:
             filters.append([doctype, OWNER[doctype], "=", owner])
         if waiting_for_reply:
             filters.append([doctype, "communication_status", "=", "Open"])
-        if doctype == LEAD and not status:
-            filters.append([doctype, "status", "=" if other_mail else "!=", OTHER_MAIL])
+        if doctype == LEAD and not status and not other_mail:
+            filters.append([doctype, "status", "!=", OTHER_MAIL])
         rows = get_client().list_documents(doctype, fields=_FIELDS[doctype] + (_SELL_FIELDS if sell_requests else []),
                                            filters=filters, limit=min(max(limit, 1), 100), order_by="modified desc")
         if sell_requests and isinstance(rows, list):

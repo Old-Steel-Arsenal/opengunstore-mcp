@@ -54,8 +54,11 @@ class CRMTools(unittest.TestCase):
         filters = self.client.list_documents.call_args.kwargs["filters"]
         self.assertIn([crm.LEAD, "email", "=", "a@b.com"], filters)
         self.assertIn([crm.LEAD, "status", "!=", crm.OTHER_MAIL], filters)
-        self.t["crm_find"](kind="lead", other_mail=True)
-        self.assertIn([crm.LEAD, "status", "=", crm.OTHER_MAIL], self.client.list_documents.call_args.kwargs["filters"])
+        self.t["crm_find"](kind="lead", email="a@b.com", other_mail=True)
+        self.assertEqual(self.client.list_documents.call_args.kwargs["filters"], [[crm.LEAD, "email", "=", "a@b.com"]])
+        self.t["crm_find"](kind="lead", status=crm.OTHER_MAIL)
+        self.assertEqual(self.client.list_documents.call_args.kwargs["filters"],
+                         [[crm.LEAD, "status", "=", crm.OTHER_MAIL]])
 
     def test_find_waiting_deals(self):
         self.t["crm_find"](waiting_for_reply=True, owner="u@x.com")

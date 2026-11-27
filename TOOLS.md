@@ -299,7 +299,7 @@ POS answers those steps with its own "method not found" error.
 
 | Task | Tool | Confirm | Notes |
 |---|---|---|---|
-| Find leads or deals | `crm_find` | no | By email, part of a name, status, owner, or `waiting_for_reply`. Leads leave out other mail unless `other_mail=true`. `sell_requests=true` keeps the deals that are guns offered to the store, with the gun, the offer and `sell_state` (no offer, offered, waiting for the gun, received) |
+| Find leads or deals | `crm_find` | no | By email, part of a name, status, owner, or `waiting_for_reply`. Leads leave out other mail; `other_mail=true` searches every lead, other mail included (`status="Other mail"` for other mail only). `sell_requests=true` keeps the deals that are guns offered to the store, with the gun, the offer and `sell_state` (no offer, offered, waiting for the gun, received) |
 | One deal in full | `crm_deal` | no | The record, notes, open tasks and the customer card. The card needs *Link deals to POS orders* on, and never holds an ID, a date of birth or a 4473 |
 | Convert a lead, change a status or owner | `crm_lead_action` | yes | A lead moved off Other mail becomes an ordinary lead. A deal is normally Won by its invoice |
 | Add a note or a task | `crm_note_task` | yes | Sends nothing to the customer |
